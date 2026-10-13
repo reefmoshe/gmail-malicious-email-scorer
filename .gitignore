@@ -13,6 +13,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# Local tool settings and private notes
+.claude/
+*.local.md
+
 # Editors / OS
 .vscode/
 .idea/
