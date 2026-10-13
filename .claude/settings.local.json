@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(npm install -g @google/clasp@3.4.1 2>&1)",
+      "PowerShell(clasp --version)",
+      "PowerShell(clasp --help)"
+    ]
+  }
+}
