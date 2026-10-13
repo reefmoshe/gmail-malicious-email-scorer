@@ -7,6 +7,9 @@
     "https://www.googleapis.com/auth/gmail.addons.current.message.readonly",
     "https://www.googleapis.com/auth/script.external_request"
   ],
+  "urlFetchWhitelist": [
+    "https://gmail-malicious-email-scorer-vtnx.onrender.com/"
+  ],
   "addOns": {
     "common": {
       "name": "Malicious Email Scorer",
