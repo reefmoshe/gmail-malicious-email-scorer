@@ -74,7 +74,7 @@ sender 35 + 5 (reinforcing) = 40; links 25 + 5 (reinforcing) = 30; attachment 15
 | Every point traceable to evidence | Heuristic weights, not calibrated |
 | Low false-positive design (correlation, caps, safeguards) | Misses attacks that look ordinary (BEC without link/attachment) |
 | Least-privilege Gmail access, minimized data | Paths/parameters of links not analyzed |
-| 341 tests, deterministic results | Brand list and phrase lists need maintenance |
+| 344 tests, deterministic results | Brand list and phrase lists need maintenance |
 | Works with no external service | Free hosting sleeps when idle |
 
 ## 8. Trade-offs to be ready to discuss

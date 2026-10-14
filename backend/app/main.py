@@ -2,6 +2,7 @@
 
 import logging
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -19,7 +20,13 @@ MAX_BODY_BYTES = 64 * 1024
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("scorer")
 
-app = FastAPI(title="Malicious Email Scorer API", version=__version__)
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    llm.warm_up()  # background SDK import; the first "Explain with AI" click stays fast
+    yield
+
+
+app = FastAPI(title="Malicious Email Scorer API", version=__version__, lifespan=lifespan)
 
 
 @app.middleware("http")

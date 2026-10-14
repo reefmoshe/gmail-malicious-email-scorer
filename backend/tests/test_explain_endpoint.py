@@ -147,3 +147,36 @@ def test_logs_contain_no_email_content_or_credentials(client, provider, caplog):
     assert "explain verdict=" in caplog.text
     for secret in (ANTHROPIC_KEY, API_KEY, "verify your password", "paypa1-secure.com", "PayPal Service"):
         assert secret not in caplog.text
+
+
+def test_startup_warm_up_imports_the_sdk_only_when_enabled_and_makes_no_request(monkeypatch):
+    started = []
+    monkeypatch.setattr(llm.threading, "Thread", lambda **kw: type("T", (), {"start": lambda self: started.append(kw["name"])})())
+    llm.warm_up()
+    assert started == []  # no key: nothing happens
+    monkeypatch.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
+    llm.warm_up()
+    assert started == ["llm-warm-up"]
+
+
+def test_warm_up_failure_never_breaks_startup(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name == "anthropic":
+            raise ImportError("simulated")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+    llm.warm_up()  # runs in a thread; must not raise
+
+
+def test_the_app_runs_the_warm_up_when_it_starts(monkeypatch):
+    calls = []
+    monkeypatch.setattr(llm, "warm_up", lambda: calls.append("warm"))
+    with TestClient(app):
+        pass
+    assert calls == ["warm"]

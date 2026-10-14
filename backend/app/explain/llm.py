@@ -196,6 +196,23 @@ def _cached(key: str) -> LlmExplanation | None:
         return None
 
 
+def warm_up() -> None:
+    """Import the SDK in the background at startup.
+
+    Importing it takes ~2.5 s on a laptop and ~25 s on the free Render instance, which
+    would otherwise be paid by the first "Explain with AI" click after every restart -
+    close to the add-on's 30 s limit. No network call is made.
+    """
+    def _import() -> None:
+        try:
+            import anthropic  # noqa: F401
+        except Exception as exc:  # noqa: BLE001 - warming is best-effort
+            logger.warning("llm warm-up failed: %s", type(exc).__name__)
+
+    if is_enabled():
+        threading.Thread(target=_import, name="llm-warm-up", daemon=True).start()
+
+
 def clear_cache() -> None:
     with _cache_lock:
         _cache.clear()
