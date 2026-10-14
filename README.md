@@ -48,7 +48,7 @@ flowchart LR
 | Explanation layer | Wording only, after scoring | `backend/app/explain/` |
 
 The split is deliberate: only the add-on has Gmail access, so it **collects and displays**;
-the backend **decides**. Detection logic lives in Python where it can be unit-tested (316 tests),
+the backend **decides**. Detection logic lives in Python where it can be unit-tested (321 tests),
 and could serve other clients unchanged.
 
 ## Technology choices
@@ -242,7 +242,7 @@ unknown fields, so a newer add-on needs a backend that knows them.
 
 ```bash
 cd backend
-pytest -q          # 316 tests, no network access
+pytest -q          # 321 tests, no network access
 ```
 
 Organized by layer: parsers (`test_auth_results_parser`, `test_urls`, `test_domains`), each check

@@ -53,7 +53,18 @@ _CERTAINTY_RE = re.compile(
     re.IGNORECASE,
 )
 _SAFE_CLAIM_RE = re.compile(r"\b(?:is|looks|appears)\s+(?:completely\s+|totally\s+)?safe\b", re.IGNORECASE)
+# A cautious sentence ("this does not mean it is definitely safe") is the desired wording,
+# so a claim preceded by a negation in the same sentence is not a claim.
+_NEGATION_RE = re.compile(r"\b(?:not|no|never|cannot|without)\b|n't\b", re.IGNORECASE)
 _SCORE_RE = re.compile(r"\b(\d{1,3})\s*(?:/\s*100|out of 100)", re.IGNORECASE)
+
+
+def _asserts(pattern: re.Pattern, text: str) -> bool:
+    for match in pattern.finditer(text):
+        sentence_start = max(text.rfind(c, 0, match.start()) for c in ".!?;")
+        if not _NEGATION_RE.search(text[sentence_start + 1 : match.start()]):
+            return True
+    return False
 
 
 class LlmExplanation(BaseModel):
@@ -109,9 +120,9 @@ def validate(raw: object, result: AnalyzeResponse) -> LlmExplanation | None:
     except ValidationError:
         return None
     text = " ".join([explanation.summary, *explanation.key_reasons, explanation.recommendation, explanation.limitations or ""])
-    if _CERTAINTY_RE.search(text):
+    if _asserts(_CERTAINTY_RE, text):
         return None
-    if result.verdict != "LOW_RISK" and _SAFE_CLAIM_RE.search(text):
+    if result.verdict != "LOW_RISK" and _asserts(_SAFE_CLAIM_RE, text):
         return None
     for match in _SCORE_RE.finditer(text):
         if result.score is None or int(match.group(1)) != result.score:

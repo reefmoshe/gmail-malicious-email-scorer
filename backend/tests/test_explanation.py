@@ -248,3 +248,19 @@ def test_adapter_treats_refusal_as_failure(monkeypatch):
     monkeypatch.setattr(anthropic, "Anthropic", _FakeSdk("refusal", "").Anthropic)
     with pytest.raises(RuntimeError):
         llm.call_provider({})
+
+
+@pytest.mark.parametrize(
+    "summary, accepted",
+    [
+        ("No warning signs were found, but that does not mean the email is definitely safe.", True),
+        ("This is not a guarantee that it is completely safe.", True),
+        ("We can't say it is 100% legitimate.", True),
+        ("This email is definitely safe.", False),
+        ("Nothing was found. This email is definitely safe.", False),  # negation in another sentence
+    ],
+)
+def test_cautious_negated_wording_is_accepted_but_claims_are_not(summary, accepted):
+    result = run(sender="GitHub <noreply@github.com>", auth_results=gmail_auth("github.com"), body_text="merged")
+    output = {"summary": summary, "key_reasons": ["No issues found."], "recommendation": "Stay alert.", "limitations": None}
+    assert (llm.validate(output, result) is not None) == accepted
