@@ -33,6 +33,9 @@ class Signal:
     # brand (e.g. a display name naming the brand a look-alike domain imitates). In that
     # case the signal adds only this many points instead of its full weight.
     reinforcing_points: int | None = None
+    # Minimum final score when this signal is counted. Reserved for independently confirmed
+    # evidence (a threat-intelligence listing), never for heuristics.
+    score_floor: int | None = None
 
 
 CATEGORIES: dict[str, Category] = {
@@ -47,6 +50,8 @@ CATEGORIES: dict[str, Category] = {
         # request whose replies go to a free mailbox). Each part alone is weak; together
         # they describe a specific fraud pattern, so the combination is its own evidence.
         Category("combined", "Combined indicators", 20),
+        # Only active when the organization's domains are configured (ORG_DOMAINS).
+        Category("organization", "Your organization", 45),
     )
 }
 
@@ -179,6 +184,13 @@ _URL_SIGNALS = (
         group="obscured_destination",
     ),
     Signal(
+        "URL_REPUTATION_MALICIOUS", "urls", 35, "high",
+        "Link host is on a threat-intelligence blocklist",
+        "Google Safe Browsing lists a website this message links to as phishing or malware. "
+        "This is independent confirmation, so the overall risk is raised to at least 90.",
+        score_floor=90,
+    ),
+    Signal(
         "URL_PLAIN_HTTP", "urls", 3, "low",
         "Unencrypted link",
         "A link uses http instead of https, so the connection is not encrypted.",
@@ -300,8 +312,27 @@ _COMBINED_SIGNALS = (
     ),
 )
 
+# Organization protection: impersonating the recipient's own company is targeted (spear)
+# phishing, so a look-alike of a configured organization domain weighs more than a brand.
+_ORGANIZATION_SIGNALS = (
+    Signal(
+        "ORG_LOOKALIKE_DOMAIN", "organization", 40, "high",
+        "Domain imitates your organization",
+        "The sender or reply address uses a domain that closely resembles one of your "
+        "organization's own domains. This is a hallmark of targeted phishing.",
+    ),
+    Signal(
+        "ORG_EXTERNAL_IDENTITY_CLAIM", "organization", 15, "medium",
+        "External sender presents itself as your organization",
+        "The message comes from outside your organization, but the sender name claims to be "
+        "your organization or shows one of its internal addresses.",
+        reinforcing_points=5,
+    ),
+)
+
 SIGNALS: dict[str, Signal] = {
-    s.id: s for s in _SIGNALS + _URL_SIGNALS + _ATTACHMENT_SIGNALS + _CONTENT_SIGNALS + _COMBINED_SIGNALS
+    s.id: s
+    for s in _SIGNALS + _URL_SIGNALS + _ATTACHMENT_SIGNALS + _CONTENT_SIGNALS + _COMBINED_SIGNALS + _ORGANIZATION_SIGNALS
 }
 
 # Verdict thresholds on the 0-100 heuristic risk score.

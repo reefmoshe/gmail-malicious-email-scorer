@@ -64,7 +64,6 @@ def test_edit_distance_counts_adjacent_swap_as_one():
         ("paypal-secure-login.com", "PayPal", "security words"),
         ("secure-paypai.com", "PayPal", "security words"),
         ("paypal.com.account-verify.net", "PayPal", "subdomain"),
-        ("upw1nd.io", "Upwind", "look-alike characters"),
         ("bankhapoalim-online.co.il", "Bank Hapoalim", "security words"),
         ("leumi-update.com", "Bank Leumi", "security words"),
     ],

@@ -11,7 +11,9 @@ from ..content import find_indicators
 from ..context import EmailContext
 from ..domains import describe_domain, find_lookalike
 from ..models import CheckOutcome, Detection
+from ..organization import configured_organization
 from .display_name import claimed_brands, claimed_roles
+from .organization import external_identity_claims
 
 
 def run(ctx: EmailContext) -> CheckOutcome:
@@ -36,13 +38,16 @@ def run(ctx: EmailContext) -> CheckOutcome:
         if claims or found.authority_claim:
             claimed = ", ".join(claims) if claims else "an executive or department (in the text)"
             identity_issues.append(f"a free {describe_domain(sender.domain)} mailbox presents itself as {claimed}")
+    org = configured_organization()
+    if org and external_identity_claims(sender, org):
+        identity_issues.append(f"an external {describe_domain(sender.domain)} address presents itself as {org.name}")
 
     if found.financial_request and identity_issues:
         outcome.detections.append(
             Detection("COMBINED_BEC_PATTERN", [f"Asks for {request} while {issue}" for issue in identity_issues])
         )
 
-    impersonated = _impersonated_brand(sender)
+    impersonated = _impersonated_brand(sender, org)
     if impersonated:
         outcome.detections.append(
             Detection(
@@ -53,8 +58,8 @@ def run(ctx: EmailContext) -> CheckOutcome:
     return outcome
 
 
-def _impersonated_brand(sender) -> str | None:
-    match = find_lookalike(sender.domain)
+def _impersonated_brand(sender, org) -> str | None:
+    match = find_lookalike(sender.domain) or (find_lookalike(sender.domain, brands=(org,)) if org else None)
     if match:
         return match.brand
     mismatched = [b.name for b in claimed_brands(sender.display) if sender.registered_domain not in b.owned_domains]

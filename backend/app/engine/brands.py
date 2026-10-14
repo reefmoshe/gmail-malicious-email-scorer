@@ -88,8 +88,6 @@ PROTECTED_BRANDS: tuple[Brand, ...] = (
     ),
     _brand("Israel Post", ["israelpost.co.il"], ["israel post", "דואר ישראל"], ["israelpost"]),
     _brand("Isracard", ["isracard.co.il"], ["isracard", "ישראכרט"], ["isracard"]),
-    # Example of protecting the user's own organization.
-    _brand("Upwind", ["upwind.io"], ["upwind"], ["upwind"]),
 )
 
 OFFICIAL_DOMAINS: frozenset[str] = frozenset(d for b in PROTECTED_BRANDS for d in b.owned_domains)
