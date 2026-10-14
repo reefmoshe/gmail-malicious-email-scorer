@@ -105,10 +105,24 @@ does not match the From domain are ignored. Gmail prepends its own header, and
 `getHeader()` returns the first occurrence; a stricter variant (all headers via
 `getRawContent()`) is listed below.
 
-**Look-alike false-positive controls.** Whole-label comparison only (`applebees.com` is
-not Apple); typo distance only for names of 6+ characters; generic words (e.g. "office")
-are not brand tokens; brands can list several official domains; IDNs are shown in
-punycode in evidence so the UI never renders a deceptive look-alike as genuine.
+**Look-alike detection is binary.** A supported technique either matches with enough
+evidence (35 points, whatever the technique) or nothing is reported - there is no
+lower-weight tier. The matched techniques are kept as evidence only. Safeguards:
+- **Ownership**: official domains and *verified* brand-owned domains (registrant organization
+  confirmed in the registrar's RDAP record, e.g. google-analytics.com -> Google LLC) are never
+  flagged. Ownership is never inferred from the name.
+- **Benign exceptions** (`BENIGN_LOOKALIKE_EXCEPTIONS`): similar-looking domains of unrelated
+  owners (leumi-card.co.il, paypay.ne.jp, unwind.com). They are exempt from look-alike
+  detection only and are *not* treated as the brand.
+- **Whole labels only**: `applebees.com` is not Apple; registered domains via the PSL.
+- **Realistic typos only**: one missing/extra/swapped letter or an adjacent-key substitution
+  on names of 6+ characters ("unwind" vs "upwind" and "paypay" vs "paypal" are not typos).
+- **Combosquatting and brand-as-subdomain require an account/security word**
+  (`paypal-secure-login`, `paypal.secure-login.xyz`) or the full official domain embedded
+  (`paypal.com.account-verify.net`); `apple-store` or `microsoft-events` is not enough.
+- **Dictionary-word brands** (apple, amazon, upwind) are not flagged merely for using another
+  domain ending (`upwind.com`).
+- **IDN**: compared in a confusable skeleton, shown in punycode in evidence.
 
 ## Phase 2 (planned, not implemented)
 

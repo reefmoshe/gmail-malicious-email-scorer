@@ -17,32 +17,51 @@ class Brand:
     # Distinctive name tokens that other domains are compared against for look-alikes.
     # Generic words (e.g. "office") are deliberately excluded to avoid false positives.
     domain_tokens: tuple[str, ...]
+    # Additional domains whose ownership by the brand was verified (registrant
+    # organization in the registrar's RDAP record) - never inferred from the name.
+    verified_domains: tuple[str, ...] = ()
+
+    @property
+    def owned_domains(self) -> tuple[str, ...]:
+        return self.domains + self.verified_domains
 
 
-def _brand(name: str, domains: list[str], names: list[str], tokens: list[str]) -> Brand:
-    return Brand(name, tuple(domains), tuple(names), tuple(tokens))
+def _brand(name: str, domains: list[str], names: list[str], tokens: list[str], verified: list[str] = ()) -> Brand:
+    return Brand(name, tuple(domains), tuple(names), tuple(tokens), tuple(verified))
 
 
 PROTECTED_BRANDS: tuple[Brand, ...] = (
-    _brand("PayPal", ["paypal.com", "paypal.me", "paypalobjects.com"], ["paypal"], ["paypal"]),
+    # verified: RDAP registrant "PayPal Inc." (2026-10-14)
+    _brand(
+        "PayPal", ["paypal.com", "paypal.me", "paypalobjects.com"], ["paypal"], ["paypal"],
+        verified=["paypal-community.com", "paypal.net"],
+    ),
     _brand(
         "Microsoft",
         ["microsoft.com", "microsoftonline.com", "office.com", "office365.com", "sharepoint.com"],
         ["microsoft", "office 365", "office365", "onedrive", "sharepoint"],
         ["microsoft", "office365", "onedrive", "sharepoint"],
     ),
-    _brand("Google", ["google.com", "google.co.il", "youtube.com"], ["google", "youtube"], ["google", "youtube"]),
+    # verified: RDAP registrant "Google LLC" (2026-10-14)
+    _brand(
+        "Google", ["google.com", "google.co.il", "youtube.com"], ["google", "youtube"], ["google", "youtube"],
+        verified=["google-analytics.com"],
+    ),
     _brand("Apple", ["apple.com"], ["apple", "icloud"], ["apple", "icloud"]),
     _brand(
         "Amazon",
         ["amazon.com", "amazon.co.uk", "amazon.de", "amazonaws.com"],
         ["amazon"],
         ["amazon"],
+        verified=["amazon-adsystem.com"],  # RDAP registrant "Amazon Technologies, Inc." (2026-10-14)
     ),
     _brand("Netflix", ["netflix.com"], ["netflix"], ["netflix"]),
     _brand("DHL", ["dhl.com", "dhl.co.il", "dhl.de"], ["dhl"], []),
     _brand("FedEx", ["fedex.com"], ["fedex"], ["fedex"]),
-    _brand("LinkedIn", ["linkedin.com"], ["linkedin"], ["linkedin"]),
+    _brand(
+        "LinkedIn", ["linkedin.com"], ["linkedin"], ["linkedin"],
+        verified=["linkedin-learning.com"],  # RDAP registrant "LinkedIn Corporation" (2026-10-14)
+    ),
     _brand(
         "Meta",
         ["facebook.com", "facebookmail.com", "instagram.com", "whatsapp.com", "meta.com"],
@@ -73,7 +92,33 @@ PROTECTED_BRANDS: tuple[Brand, ...] = (
     _brand("Upwind", ["upwind.io"], ["upwind"], ["upwind"]),
 )
 
-OFFICIAL_DOMAINS: frozenset[str] = frozenset(d for b in PROTECTED_BRANDS for d in b.domains)
+OFFICIAL_DOMAINS: frozenset[str] = frozenset(d for b in PROTECTED_BRANDS for d in b.owned_domains)
+
+# Registered domains that resemble a protected brand but belong to someone else. They are
+# exempt from look-alike detection only; they are NOT treated as owned by the brand.
+BENIGN_LOOKALIKE_EXCEPTIONS: dict[str, str] = {
+    "leumi-card.co.il": "Leumi Card (now Max), a separate credit-card company",
+    "paypay.ne.jp": "PayPay, a Japanese payment service unrelated to PayPal",
+    "unwind.com": "Ordinary English word, unrelated to Upwind",
+}
+
+# Brand tokens that are also ordinary words: the same word under another domain ending
+# ("apple.xyz", "upwind.com") is too likely to be an unrelated owner to count as impersonation.
+DICTIONARY_WORD_TOKENS: frozenset[str] = frozenset({"apple", "amazon", "upwind"})
+
+# Words attackers combine with a brand name to make a domain look like an account or
+# security page ("paypal-secure-login"). A brand plus an arbitrary word ("apple-store",
+# "microsoft-events") is not enough evidence on its own.
+LOOKALIKE_CONTEXT_WORDS: frozenset[str] = frozenset(
+    {
+        "login", "logon", "signin", "sign", "secure", "security", "verify", "verification",
+        "validate", "account", "accounts", "update", "support", "help", "helpdesk", "service",
+        "services", "billing", "invoice", "payment", "payments", "pay", "wallet", "alert",
+        "alerts", "notice", "notification", "auth", "id", "confirm", "unlock", "recovery",
+        "recover", "reset", "password", "online", "customer", "care", "portal", "team",
+        "safety", "protect", "protection", "access", "mail", "center", "desk", "official",
+    }
+)
 
 # Registered domains of consumer (free) mailbox providers.
 FREEMAIL_DOMAINS: frozenset[str] = frozenset(

@@ -10,7 +10,13 @@ from dataclasses import dataclass
 
 from publicsuffixlist import PublicSuffixList
 
-from .brands import OFFICIAL_DOMAINS, PROTECTED_BRANDS
+from .brands import (
+    BENIGN_LOOKALIKE_EXCEPTIONS,
+    DICTIONARY_WORD_TOKENS,
+    LOOKALIKE_CONTEXT_WORDS,
+    OFFICIAL_DOMAINS,
+    PROTECTED_BRANDS,
+)
 
 _PSL = PublicSuffixList()
 _LABEL_RE = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
@@ -102,57 +108,121 @@ def edit_distance(a: str, b: str) -> int:
 class LookalikeMatch:
     brand: str
     official_domain: str
-    technique: str
+    techniques: tuple[str, ...]  # every technique that matched; metadata only, never weighted
+
+    @property
+    def technique(self) -> str:
+        return " and ".join(self.techniques)
 
 
 def find_lookalike(ascii_domain: str | None) -> LookalikeMatch | None:
-    """Return how a domain imitates a protected brand, or None.
+    """Return a reliable impersonation of a protected brand, or None.
 
-    Only whole-label comparisons are used, so legitimate domains that merely contain
-    a brand name as a substring (e.g. "applebees.com") are not flagged.
+    Detection is binary: either a supported technique matched with enough evidence, or
+    nothing is reported. Safeguards against accidental similarity:
+      - domains owned by the brand (official or verified) and explicit benign exceptions
+        are never flagged;
+      - only whole labels are compared ("applebees.com" is not Apple);
+      - typos must follow a realistic typing error (adjacent key, missing/extra/swapped
+        letter), so "unwind" is not "upwind" and "paypay" is not "paypal";
+      - a brand combined with other words, or used as a subdomain, needs an account /
+        security word ("paypal-secure-login") - "apple-store" or "microsoft-events" is not
+        enough;
+      - a brand that is also a dictionary word is not flagged just for using another
+        domain ending ("upwind.com").
     """
     registered = registered_domain(ascii_domain)
-    if not ascii_domain or not registered or registered in OFFICIAL_DOMAINS:
+    if not ascii_domain or not registered:
+        return None
+    if registered in OFFICIAL_DOMAINS or registered in BENIGN_LOOKALIKE_EXCEPTIONS:
         return None
 
-    label = to_unicode(_registered_label(registered))
+    label = to_unicode(_registered_label(registered)).casefold()
     label_skeleton = skeleton(label)
-    label_parts = [p for p in re.split(r"[-.]", label_skeleton) if p]
-    subdomain = ascii_domain[: -len(registered)].rstrip(".")
-    subdomain_skeletons = {skeleton(to_unicode(p)) for p in subdomain.split(".") if p}
+    parts = [p for p in label.split("-") if p]
+    subdomain_labels = [to_unicode(p).casefold() for p in ascii_domain[: -len(registered)].split(".") if p]
+    has_context = any(_is_context_word(p) for p in parts + subdomain_labels)
 
     for brand in PROTECTED_BRANDS:
-        official = brand.domains[0]
+        techniques = []
         for token in brand.domain_tokens:
             token_skeleton = skeleton(token)
-            if len(token) >= 4 and label_skeleton == token_skeleton:
-                technique = (
-                    "same name under a different domain ending"
-                    if label == token
-                    else "uses look-alike characters"
-                )
-                return LookalikeMatch(brand.name, official, technique)
-            if _is_typo(label_skeleton, token_skeleton):
-                return LookalikeMatch(brand.name, official, "differs by a small typo")
-            if len(label_parts) > 1 and any(
-                part == token_skeleton or _is_typo(part, token_skeleton) for part in label_parts
+            if len(token) >= 4 and label_skeleton == token_skeleton and label != token:
+                techniques.append("uses look-alike characters")
+            if label == token and token not in DICTIONARY_WORD_TOKENS:
+                techniques.append("uses the brand name under a different domain ending")
+            if _is_typo(label, token):
+                techniques.append("is a likely typo of the brand name")
+            if len(parts) > 1 and has_context and any(_contains_brand(p, token) for p in parts):
+                techniques.append("combines the brand name with account or security words")
+            elif len(parts) == 1 and _brand_with_context_word(label, token):
+                techniques.append("combines the brand name with account or security words")
+            if _embeds_official_domain(subdomain_labels, brand) or (
+                has_context and any(skeleton(p) == token_skeleton for p in subdomain_labels)
             ):
-                return LookalikeMatch(brand.name, official, "combines the brand name with other words")
-            if token_skeleton in subdomain_skeletons:
-                return LookalikeMatch(
-                    brand.name, official, "uses the brand name as a subdomain of an unrelated domain"
-                )
+                techniques.append("uses the brand name as a subdomain of an unrelated domain")
+        if techniques:
+            return LookalikeMatch(brand.name, brand.domains[0], tuple(dict.fromkeys(techniques)))
     return None
 
 
+def _contains_brand(part: str, token: str) -> bool:
+    """A label part that is the brand, in look-alike characters, or with a typo."""
+    return skeleton(part) == skeleton(token) or _is_typo(part, token)
+
+
+def _is_context_word(text: str) -> bool:
+    """Compared in skeleton form, so "l0gin" or "secur3" still count."""
+    return skeleton(text) in _CONTEXT_SKELETONS
+
+
+def _brand_with_context_word(label: str, token: str) -> bool:
+    """Brand fused with an account/security word without a hyphen: "paypalsecure", "securepaypal"."""
+    skel, token_skel = skeleton(label), skeleton(token)
+    if len(skel) <= len(token_skel):
+        return False
+    if skel.startswith(token_skel):
+        return skel[len(token_skel):] in _CONTEXT_SKELETONS
+    if skel.endswith(token_skel):
+        return skel[: -len(token_skel)] in _CONTEXT_SKELETONS
+    return False
+
+
+def _embeds_official_domain(subdomain_labels: list[str], brand) -> bool:
+    """E.g. "paypal.com.account-verify.net": the full official domain inside the subdomain."""
+    joined = "." + ".".join(subdomain_labels) + "."
+    return any(f".{official}." in joined for official in brand.owned_domains)
+
+
+_CONTEXT_SKELETONS = frozenset(skeleton(w) for w in LOOKALIKE_CONTEXT_WORDS)
+
+# Physical neighbours on a QWERTY keyboard (rows staggered by a quarter key).
+_ROWS = ("qwertyuiop", "asdfghjkl", "zxcvbnm")
+_KEY_POS = {c: (r, i + (0, 0.25, 0.75)[r]) for r, row in enumerate(_ROWS) for i, c in enumerate(row)}
+
+
+def _adjacent_keys(a: str, b: str) -> bool:
+    if a not in _KEY_POS or b not in _KEY_POS:
+        return False
+    (ra, xa), (rb, xb) = _KEY_POS[a], _KEY_POS[b]
+    return abs(ra - rb) <= 1 and abs(xa - xb) <= 1
+
+
 def _is_typo(candidate: str, token: str) -> bool:
-    """One edit away (two for long names). Short names are excluded: too many collisions."""
-    if len(token) < 6:
+    """A realistic single typing error on a brand name of 6+ characters: a missing,
+    extra or swapped letter, or a letter replaced by a neighbouring key. Arbitrary
+    one-letter differences are not enough ("unwind" vs "upwind", "paypay" vs "paypal")."""
+    if len(token) < 6 or candidate == token or abs(len(candidate) - len(token)) > 1:
         return False
-    max_distance = 2 if len(token) >= 10 else 1
-    if candidate == token or abs(len(candidate) - len(token)) > max_distance:
+    if edit_distance(candidate, token) != 1:
         return False
-    return edit_distance(candidate, token) <= max_distance
+    if len(candidate) != len(token):
+        return True  # one missing or extra letter
+    diffs = [i for i, (x, y) in enumerate(zip(candidate, token)) if x != y]
+    if len(diffs) == 2:
+        return True  # adjacent swap (edit distance 1 with two differing positions)
+    i = diffs[0]
+    return _adjacent_keys(candidate[i], token[i])
 
 
 def describe_domain(ascii_domain: str) -> str:

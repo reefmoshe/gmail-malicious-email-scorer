@@ -32,7 +32,7 @@ def run(ctx: EmailContext) -> CheckOutcome:
     sent_from = describe_domain(sender.domain)
 
     claimed_brands = [b for b in PROTECTED_BRANDS if any(_mentions(display_skeleton, n) for n in b.names)]
-    mismatched = [b for b in claimed_brands if sender.registered_domain not in b.domains]
+    mismatched = [b for b in claimed_brands if sender.registered_domain not in b.owned_domains]
     if mismatched:
         outcome.detections.append(
             Detection(
@@ -70,7 +70,7 @@ def run(ctx: EmailContext) -> CheckOutcome:
 def _brand_of_domain(ascii_domain: str) -> str | None:
     """Brand an embedded address claims: one of its official domains, or a look-alike of it."""
     registered = registered_domain(ascii_domain)
-    official = next((b.name for b in PROTECTED_BRANDS if registered in b.domains), None)
+    official = next((b.name for b in PROTECTED_BRANDS if registered in b.owned_domains), None)
     if official:
         return official
     match = find_lookalike(ascii_domain)

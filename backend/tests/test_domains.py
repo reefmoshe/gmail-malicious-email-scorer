@@ -58,15 +58,15 @@ def test_edit_distance_counts_adjacent_swap_as_one():
         ("xn--pypal-4ve.com", "PayPal", "look-alike characters"),
         ("xn--80ak6aa92e.com", "Apple", "look-alike characters"),  # "apple" spelled entirely in Cyrillic
         ("rnicrosoft.com", "Microsoft", "look-alike characters"),
-        ("paypal.net", "PayPal", "different domain ending"),
+        ("paypal.top", "PayPal", "different domain ending"),
         ("paypall.com", "PayPal", "typo"),
         ("micorsoft.com", "Microsoft", "typo"),
-        ("paypal-secure-login.com", "PayPal", "other words"),
-        ("secure-paypai.com", "PayPal", "other words"),
+        ("paypal-secure-login.com", "PayPal", "security words"),
+        ("secure-paypai.com", "PayPal", "security words"),
         ("paypal.com.account-verify.net", "PayPal", "subdomain"),
         ("upw1nd.io", "Upwind", "look-alike characters"),
-        ("bankhapoalim-online.co.il", "Bank Hapoalim", "other words"),
-        ("leumi-update.com", "Bank Leumi", "other words"),
+        ("bankhapoalim-online.co.il", "Bank Hapoalim", "security words"),
+        ("leumi-update.com", "Bank Leumi", "security words"),
     ],
 )
 def test_detects_lookalikes(domain, brand, technique_fragment):
@@ -82,6 +82,7 @@ def test_detects_lookalikes(domain, brand, technique_fragment):
         "paypal.com",
         "mail.paypal.com",          # subdomain of an official domain
         "google.co.il",             # official country domain
+        "paypal.net",               # verified owner: PayPal Inc. (RDAP)
         "applebees.com",            # brand only as a substring, not a whole label
         "amazonas-tours.com",       # "amazonas" is not "amazon"
         "googleplex-fans.org",
@@ -104,3 +105,56 @@ def test_unicode_and_punycode_edge_cases_do_not_misfire(domain):
     """Full-width letters normalize to the official domain; invalid or unrelated
     punycode neither crashes nor matches a brand."""
     assert find_lookalike(normalize_domain(domain)) is None
+
+
+# --- Reliability safeguards (binary: reliable detection or nothing) -----------------
+
+@pytest.mark.parametrize(
+    "domain, reason",
+    [
+        ("google-analytics.com", "verified Google-owned"),
+        ("paypal-community.com", "verified PayPal-owned"),
+        ("linkedin-learning.com", "verified LinkedIn-owned"),
+        ("amazon-adsystem.com", "verified Amazon-owned"),
+        ("leumi-card.co.il", "benign exception: separate company"),
+        ("paypay.ne.jp", "benign exception + not a keyboard typo (l vs y)"),
+        ("unwind.com", "dictionary word + not a keyboard typo (p vs n)"),
+        ("upwind.com", "brand token is a dictionary word: other domain ending is not enough"),
+        ("apple.xyz", "dictionary-word brand under another ending"),
+        ("apple-store.co.il", "brand + ordinary word, no account/security word"),
+        ("microsoft-events.com", "brand + ordinary word"),
+        ("amazon-river-tours.com", "brand + ordinary words"),
+        ("goggle.com", "o vs g are not neighbouring keys"),
+    ],
+)
+def test_reliability_safeguards_prevent_false_positives(domain, reason):
+    assert find_lookalike(normalize_domain(domain)) is None, reason
+
+
+@pytest.mark.parametrize(
+    "domain",
+    ["amazom.com", "paypalsecure.com", "rnicrosoftlogin.com", "paypal.secure-login.xyz", "linkedin-l0gin.com", "apple-id-verify.com"],
+)
+def test_reliable_attack_patterns_are_still_detected(domain):
+    assert find_lookalike(normalize_domain(domain)) is not None
+
+
+def test_benign_exceptions_are_not_brand_ownership():
+    """An exception only suppresses look-alike detection; the domain is not treated as the brand."""
+    from app.engine.brands import BENIGN_LOOKALIKE_EXCEPTIONS, OFFICIAL_DOMAINS
+
+    assert not set(BENIGN_LOOKALIKE_EXCEPTIONS) & OFFICIAL_DOMAINS
+
+
+def test_exception_list_suppresses_an_otherwise_reliable_match(monkeypatch):
+    from app.engine import domains
+
+    assert domains.find_lookalike("paypal-secure-login.com") is not None
+    monkeypatch.setattr(domains, "BENIGN_LOOKALIKE_EXCEPTIONS", {"paypal-secure-login.com": "test"})
+    assert domains.find_lookalike("paypal-secure-login.com") is None
+
+
+def test_several_techniques_on_one_domain_produce_one_match():
+    match = find_lookalike("paypal.com.paypal-secure.net")
+    assert match.brand == "PayPal"
+    assert len(match.techniques) == 2  # brand-with-security-word and embedded official domain

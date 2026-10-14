@@ -197,3 +197,33 @@ def test_reply_to_lookalike_detected_even_when_sender_is_malformed():
 @pytest.mark.parametrize("reply_to", ["", "not an address", "x@", "@@@"])
 def test_malformed_reply_to_produces_no_finding(reply_to):
     assert counted(run(sender="A <a@acme.com>", reply_to=reply_to)) == {}
+
+
+def test_multiple_techniques_on_one_sender_domain_count_35_once():
+    result = run(sender="Accounts <a@paypal.com.paypal-secure.net>")
+    f = finding(result, "SENDER_LOOKALIKE_DOMAIN")
+    assert f.counted_points == 35 and len(f.evidence) == 1
+    assert " and " in f.evidence[0]  # both techniques explained in one piece of evidence
+    assert result.score == 35
+
+
+@pytest.mark.parametrize(
+    "sender",
+    [
+        "Google Analytics <analytics-noreply@google-analytics.com>",
+        "PayPal Community <community@paypal-community.com>",
+        "LinkedIn Learning <learning@linkedin-learning.com>",
+    ],
+)
+def test_verified_brand_owned_senders_are_clean(sender):
+    assert counted(run(sender=sender)) == {}
+
+
+def test_benign_exception_domain_is_not_treated_as_the_brand():
+    """leumi-card.co.il is not a Bank Leumi look-alike, but it is not Bank Leumi either."""
+    result = run(sender="Bank Leumi <info@leumi-card.co.il>")
+    assert counted(result) == {"SENDER_BRAND_DISPLAY_MISMATCH": 10}
+
+
+def test_dictionary_word_domain_does_not_trigger_lookalike():
+    assert counted(run(sender="Unwind Spa <hello@unwind.com>")) == {}
