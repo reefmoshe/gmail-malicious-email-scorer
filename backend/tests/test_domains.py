@@ -57,6 +57,7 @@ def test_edit_distance_counts_adjacent_swap_as_one():
         ("paypa1.com", "PayPal", "look-alike characters"),
         ("xn--pypal-4ve.com", "PayPal", "look-alike characters"),
         ("xn--80ak6aa92e.com", "Apple", "look-alike characters"),  # "apple" spelled entirely in Cyrillic
+        ("upw1nd.io", "Upwind", "look-alike characters"),
         ("rnicrosoft.com", "Microsoft", "look-alike characters"),
         ("paypal.top", "PayPal", "different domain ending"),
         ("paypall.com", "PayPal", "typo"),

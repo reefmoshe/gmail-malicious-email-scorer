@@ -33,7 +33,6 @@ def good_output(result):
 
 @pytest.fixture
 def llm_on(monkeypatch):
-    monkeypatch.setenv("LLM_EXPLANATIONS_ENABLED", "true")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
 
     def install(response):
@@ -64,16 +63,15 @@ def test_without_configuration_the_template_is_used_and_no_provider_is_called(mo
     assert explanation.key_reasons
 
 
-def test_api_key_alone_does_not_enable_the_llm(monkeypatch):
-    """Sending findings to a provider needs the explicit opt-in flag as well."""
+def test_the_api_key_is_the_single_activation_switch(monkeypatch):
+    assert not llm.is_enabled()
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
-    monkeypatch.setattr(llm, "call_provider", lambda payload: pytest.fail("provider must not be called"))
-    assert explain(phishing_result()).source == "template"
+    assert llm.is_enabled()
 
 
-def test_flag_without_api_key_falls_back(monkeypatch):
-    monkeypatch.setenv("LLM_EXPLANATIONS_ENABLED", "true")
-    assert explain(phishing_result()).source == "template"
+def test_system_prompt_is_loaded_from_the_versioned_file():
+    assert llm.SYSTEM_PROMPT.startswith("You explain the result")
+    assert "untrusted_evidence" in llm.SYSTEM_PROMPT
 
 
 # --- The LLM cannot change the decision ----------------------------------------------------------

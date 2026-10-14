@@ -33,9 +33,6 @@ class Signal:
     # brand (e.g. a display name naming the brand a look-alike domain imitates). In that
     # case the signal adds only this many points instead of its full weight.
     reinforcing_points: int | None = None
-    # Minimum final score when this signal is counted. Reserved for independently confirmed
-    # evidence (a threat-intelligence listing), never for heuristics.
-    score_floor: int | None = None
 
 
 CATEGORIES: dict[str, Category] = {
@@ -46,12 +43,6 @@ CATEGORIES: dict[str, Category] = {
         Category("urls", "Links", 35),
         Category("attachments", "Attachments", 35),
         Category("content", "Message content", 15),
-        # Interactions between who sent the message and what it asks for (e.g. a payment
-        # request whose replies go to a free mailbox). Each part alone is weak; together
-        # they describe a specific fraud pattern, so the combination is its own evidence.
-        Category("combined", "Combined indicators", 20),
-        # Only active when the organization's domains are configured (ORG_DOMAINS).
-        Category("organization", "Your organization", 45),
     )
 }
 
@@ -184,13 +175,6 @@ _URL_SIGNALS = (
         group="obscured_destination",
     ),
     Signal(
-        "URL_REPUTATION_MALICIOUS", "urls", 35, "high",
-        "Link host is on a threat-intelligence blocklist",
-        "Google Safe Browsing lists a website this message links to as phishing or malware. "
-        "This is independent confirmation, so the overall risk is raised to at least 90.",
-        score_floor=90,
-    ),
-    Signal(
         "URL_PLAIN_HTTP", "urls", 3, "low",
         "Unencrypted link",
         "A link uses http instead of https, so the connection is not encrypted.",
@@ -213,16 +197,11 @@ _ATTACHMENT_SIGNALS = (
         "are a common way to deliver malware. Some businesses use them legitimately.",
     ),
     Signal(
-        "ATT_DISK_IMAGE", "attachments", 15, "medium",
-        "Disk-image attachment",
-        "Disk images (.iso, .img, .vhd) are used to smuggle programs past security warnings. "
-        "They are uncommon in normal business email.",
-    ),
-    Signal(
-        "ATT_HTML", "attachments", 15, "medium",
-        "Web page attachment",
-        "The attachment opens in a browser. Attached web pages are a common way to show a fake "
-        "login form without any link in the email.",
+        "ATT_RISKY_FORMAT", "attachments", 15, "medium",
+        "Risky attachment format",
+        "The attachment is a web page (.html, .svg) that can show a fake login form, or a disk "
+        "image (.iso, .img) used to smuggle programs past security warnings. Both are uncommon "
+        "in normal business email.",
     ),
     Signal(
         "ATT_DOUBLE_EXTENSION", "attachments", 15, "high",
@@ -230,19 +209,6 @@ _ATTACHMENT_SIGNALS = (
         "The file name ends with two extensions (e.g. invoice.pdf.exe) so it looks like a "
         "document while actually being a different type of file.",
         reinforcing_points=5,
-    ),
-    Signal(
-        "ATT_DECEPTIVE_NAME", "attachments", 10, "medium",
-        "File name uses hidden or reversing characters",
-        "The file name contains invisible or text-reversing characters, or long padding, that "
-        "change how the name appears on screen.",
-        reinforcing_points=5,
-    ),
-    Signal(
-        "ATT_ARCHIVE", "attachments", 8, "low",
-        "Compressed archive attachment",
-        "Archives (.zip, .rar) are common and usually harmless, but they can hide their contents "
-        "from security scanning.",
     ),
     Signal(
         "ATT_TYPE_MISMATCH", "attachments", 5, "low",
@@ -253,7 +219,7 @@ _ATTACHMENT_SIGNALS = (
 )
 
 # Content: behaviours detected from word combinations, never single keywords. Pressure
-# tactics share one correlation group and are only reported next to a request.
+# is only reported next to a request for credentials or money.
 _CONTENT_SIGNALS = (
     Signal(
         "CONTENT_CREDENTIAL_REQUEST", "content", 10, "medium",
@@ -268,72 +234,15 @@ _CONTENT_SIGNALS = (
         "Changed bank details are the core of invoice and payroll fraud.",
     ),
     Signal(
-        "CONTENT_ACCOUNT_THREAT", "content", 5, "low",
-        "Threatens to suspend or close an account",
-        "The message warns that an account will be suspended, locked or closed - a pressure "
-        "tactic to make you act without checking.",
-        group="pressure",
-    ),
-    Signal(
-        "CONTENT_URGENCY", "content", 5, "low",
-        "Pushes you to act immediately",
-        "The message demands urgent action alongside its request. Urgency on its own is common "
-        "and is only reported together with a request.",
-        group="pressure",
-    ),
-    Signal(
-        "CONTENT_SECRECY", "content", 5, "low",
-        "Asks you to keep the request secret",
-        "The message asks for discretion or says the sender cannot be reached - typical of "
-        "fraud that tries to avoid verification.",
-        group="pressure",
-    ),
-    Signal(
-        "CONTENT_GENERIC_GREETING", "content", 3, "low",
-        "Generic greeting with a sensitive request",
-        "The message addresses you generically (e.g. 'Dear customer') while asking for sensitive "
-        "information, which suggests a mass-mailed message.",
+        "CONTENT_PRESSURE", "content", 5, "low",
+        "Pressures you to act immediately",
+        "Alongside its request, the message demands urgent action or threatens to suspend or "
+        "close an account - a tactic to make you act without checking. Urgency on its own is "
+        "common and is only reported together with a request.",
     ),
 )
 
-_COMBINED_SIGNALS = (
-    Signal(
-        "COMBINED_BEC_PATTERN", "combined", 20, "high",
-        "Payment request from an unverifiable identity",
-        "A request for money or new bank details comes together with an identity problem: replies "
-        "are redirected elsewhere, or a personal mailbox presents itself as a company or executive. "
-        "This is the typical pattern of business email compromise.",
-    ),
-    Signal(
-        "COMBINED_IMPERSONATION_REQUEST", "combined", 10, "medium",
-        "Sensitive request from a sender impersonating a brand",
-        "The message asks for credentials or money while the sender imitates a known brand or "
-        "organization.",
-    ),
-)
-
-# Organization protection: impersonating the recipient's own company is targeted (spear)
-# phishing, so a look-alike of a configured organization domain weighs more than a brand.
-_ORGANIZATION_SIGNALS = (
-    Signal(
-        "ORG_LOOKALIKE_DOMAIN", "organization", 40, "high",
-        "Domain imitates your organization",
-        "The sender or reply address uses a domain that closely resembles one of your "
-        "organization's own domains. This is a hallmark of targeted phishing.",
-    ),
-    Signal(
-        "ORG_EXTERNAL_IDENTITY_CLAIM", "organization", 15, "medium",
-        "External sender presents itself as your organization",
-        "The message comes from outside your organization, but the sender name claims to be "
-        "your organization or shows one of its internal addresses.",
-        reinforcing_points=5,
-    ),
-)
-
-SIGNALS: dict[str, Signal] = {
-    s.id: s
-    for s in _SIGNALS + _URL_SIGNALS + _ATTACHMENT_SIGNALS + _CONTENT_SIGNALS + _COMBINED_SIGNALS + _ORGANIZATION_SIGNALS
-}
+SIGNALS: dict[str, Signal] = {s.id: s for s in _SIGNALS + _URL_SIGNALS + _ATTACHMENT_SIGNALS + _CONTENT_SIGNALS}
 
 # Verdict thresholds on the 0-100 heuristic risk score.
 SUSPICIOUS_THRESHOLD = 30

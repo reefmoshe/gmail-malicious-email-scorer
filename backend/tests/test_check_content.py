@@ -69,21 +69,18 @@ def test_bank_details_change_is_financial_not_a_credential_request():
 
 # --- Pressure tactics: only with a request, counted once -------------------------------------
 
-def test_pressure_tactics_are_correlated():
+def test_urgency_and_threats_are_one_pressure_finding_counted_once():
     result = text_only(
         "Your account will be suspended. Act immediately! Verify your password now. "
         "Final notice, within 24 hours."
     )
-    statuses = {f.signal_id: f.score_status for f in result.findings}
-    pressure = [statuses[s] for s in ("CONTENT_ACCOUNT_THREAT", "CONTENT_URGENCY") if s in statuses]
-    assert sorted(pressure) == ["correlated", "counted"]
+    pressure = finding(result, "CONTENT_PRESSURE")
+    assert pressure.counted_points == 5
+    assert len(pressure.evidence) >= 2  # several phrases, one finding
 
 
-def test_secrecy_counts_only_with_money():
-    with_login = text_only("Keep this confidential. Please verify your password.")
-    assert finding(with_login, "CONTENT_SECRECY") is None
-    with_money = text_only("Keep this confidential. Please process a wire transfer today.")
-    assert finding(with_money, "CONTENT_SECRECY") is not None
+def test_pressure_without_a_request_is_not_reported():
+    assert counted(text_only("Your account will be suspended immediately.")) == {}
 
 
 def test_content_category_cap_is_15():

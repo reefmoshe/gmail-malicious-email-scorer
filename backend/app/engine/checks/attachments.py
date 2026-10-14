@@ -1,39 +1,31 @@
-"""Attachment metadata: file names, declared types and sizes. Contents are never read.
+"""Attachment metadata: file names and declared types. Contents are never read.
 
-Every finding is about a specific file (its subject), so a deceptive name on an
+Every finding is about a specific file (its subject), so a double extension on an
 executable reinforces the executable finding instead of being counted in full.
 """
 
-import re
-import unicodedata
-
 from ..attachment_data import (
-    ARCHIVE_EXTENSIONS,
-    DISK_IMAGE_EXTENSIONS,
     DOCUMENT_LIKE_EXTENSIONS,
     EXECUTABLE_EXTENSIONS,
     EXTENSION_FAMILIES,
-    HTML_EXTENSIONS,
     MACRO_EXTENSIONS,
+    RISKY_FORMAT_EXTENSIONS,
     mime_family,
 )
 from ..context import EmailContext
 from ..models import CheckOutcome, Detection
 
 _MAX_EVIDENCE = 5
-# Bidirectional controls can make "invoice‮fdp.exe" display as "invoiceexe.pdf".
-_BIDI_CONTROLS = set("‎‏‪‫‬‭‮⁦⁧⁨⁩")
-_INVISIBLE = set("​‌‍⁠﻿")
-_PADDING_RE = re.compile(r"[ _. ]{6,}\.[^.]+$")
-_RISKY_FINAL = EXECUTABLE_EXTENSIONS | HTML_EXTENSIONS | DISK_IMAGE_EXTENSIONS | ARCHIVE_EXTENSIONS | MACRO_EXTENSIONS
+# Invisible and text-reversing characters can make "invoice‮fdp.exe" display as
+# "invoiceexe.pdf"; they are removed before reading the real extension.
+_HIDDEN_CHARACTERS = set("​‌‍‎‏‪‫‬‭‮⁠⁦⁧⁨⁩﻿")
 
 _BY_EXTENSION = (
     ("ATT_EXECUTABLE", EXECUTABLE_EXTENSIONS),
     ("ATT_MACRO_DOC", MACRO_EXTENSIONS),
-    ("ATT_DISK_IMAGE", DISK_IMAGE_EXTENSIONS),
-    ("ATT_HTML", HTML_EXTENSIONS),
-    ("ATT_ARCHIVE", ARCHIVE_EXTENSIONS),
+    ("ATT_RISKY_FORMAT", RISKY_FORMAT_EXTENSIONS),
 )
+_RISKY_FINAL = EXECUTABLE_EXTENSIONS | MACRO_EXTENSIONS | RISKY_FORMAT_EXTENSIONS
 
 
 def run(ctx: EmailContext) -> CheckOutcome:
@@ -51,9 +43,8 @@ def run(ctx: EmailContext) -> CheckOutcome:
         entry[1].add(name)
 
     for attachment in ctx.attachments:
-        raw_name = attachment.filename
-        shown = visible_name(raw_name)
-        extensions = _extensions(raw_name)
+        shown = visible_name(attachment.filename)
+        extensions = _extensions(attachment.filename)
         final = extensions[-1] if extensions else ""
 
         for signal_id, group in _BY_EXTENSION:
@@ -62,9 +53,6 @@ def run(ctx: EmailContext) -> CheckOutcome:
 
         if len(extensions) >= 2 and extensions[-2] in DOCUMENT_LIKE_EXTENSIONS and final in _RISKY_FINAL:
             add("ATT_DOUBLE_EXTENSION", f'"{shown}" looks like a .{extensions[-2]} file but is .{final}', shown)
-
-        if any(c in _BIDI_CONTROLS or c in _INVISIBLE for c in raw_name) or _PADDING_RE.search(raw_name):
-            add("ATT_DECEPTIVE_NAME", f'"{shown}" contains hidden characters or padding before its real extension', shown)
 
         declared = mime_family(attachment.content_type)
         expected = EXTENSION_FAMILIES.get(final)
@@ -79,16 +67,15 @@ def run(ctx: EmailContext) -> CheckOutcome:
 
 
 def _extensions(filename: str) -> list[str]:
-    """Extensions as Windows would interpret them: hidden characters removed, trailing dots
-    and spaces stripped ("invoice.exe. " opens as .exe)."""
-    clean = "".join(c for c in filename if c not in _BIDI_CONTROLS and c not in _INVISIBLE)
-    clean = clean.strip().rstrip(". ").lower()
+    """Extensions as Windows reads them: hidden characters removed, trailing dots and
+    spaces stripped ("invoice.exe. " opens as .exe)."""
+    clean = "".join(c for c in filename if c not in _HIDDEN_CHARACTERS).strip().rstrip(". ").lower()
     parts = clean.split(".")
-    return [p.strip() for p in parts[1:] if p.strip()] if len(parts) > 1 else []
+    return [p.strip() for p in parts[1:] if p.strip()]
 
 
 def visible_name(filename: str) -> str:
-    """File name for evidence, with hidden control characters made visible."""
-    shown = "".join(f"[U+{ord(c):04X}]" if c in _BIDI_CONTROLS or c in _INVISIBLE else c for c in filename)
-    shown = "".join(" " if unicodedata.category(c) == "Cc" else c for c in shown)
+    """File name for evidence, with hidden characters made visible and length bounded."""
+    shown = "".join(f"[U+{ord(c):04X}]" if c in _HIDDEN_CHARACTERS else c for c in filename)
+    shown = "".join(c if c.isprintable() else " " for c in shown)
     return shown if len(shown) <= 120 else shown[:119] + "…"

@@ -42,7 +42,7 @@ def test_all_signals_together_respect_caps():
     assert result.category_scores["authentication"] <= 30
     assert result.category_scores["sender_identity"] <= 45
     assert result.category_scores["urls"] <= 35
-    assert sum(result.category_scores.values()) == 30 + 45 + 35 + 35 + 15 + 20 + 45
+    assert sum(result.category_scores.values()) == 30 + 45 + 35 + 35 + 15
     assert result.total == 100  # final score capped at 100
 
 

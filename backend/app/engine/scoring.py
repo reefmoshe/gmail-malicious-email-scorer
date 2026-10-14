@@ -9,8 +9,6 @@ Rules, in order:
      evidence, so it adds only its signal's reinforcing_points ("reinforcing").
   4. Each category is capped; contributions above the cap are marked "capped".
   5. Category scores are summed and capped at 100. Positive evidence never subtracts.
-  6. Override: a counted signal with a score_floor (only a threat-intelligence listing)
-     raises the final score to at least that floor.
 
 The verdict follows the score thresholds, with one floor: a single high-severity finding
 makes the email at least SUSPICIOUS (never MALICIOUS on its own), because such signals
@@ -83,9 +81,6 @@ def score(detections: list[Detection]) -> ScoreResult:
         result.category_scores[category.id] = category.cap - remaining
 
     result.total = min(100, sum(result.category_scores.values()))
-    floors = [f.signal.score_floor for f in result.findings if f.signal.score_floor and f.score_status != "correlated"]
-    if floors:
-        result.total = max(result.total, max(floors))
     result.findings.sort(key=lambda f: (-f.counted_points, -f.signal.points))
     return result
 
@@ -114,9 +109,6 @@ def _apply_reinforcement(winners: list[ScoredFinding]) -> None:
 
 
 def decide_verdict(total: int, findings: list[ScoredFinding]) -> tuple[str, str]:
-    confirmed = [f for f in findings if f.signal.score_floor and f.score_status != "correlated"]
-    if confirmed:
-        return "MALICIOUS", f'Independent threat intelligence confirmed a finding ("{confirmed[0].signal.title}").'
     if total >= MALICIOUS_THRESHOLD:
         return "MALICIOUS", f"The risk score reached the malicious threshold ({MALICIOUS_THRESHOLD})."
     if total >= SUSPICIOUS_THRESHOLD:

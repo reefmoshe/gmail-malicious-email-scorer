@@ -40,8 +40,6 @@ def test_categories_without_collected_data_are_not_available():
         "urls": "not_available",
         "attachments": "not_available",
         "content": "not_available",
-        "combined": "not_available",
-        "organization": "not_applicable",  # no organization configured
     }
     assert check_status(result, "attachments") == "not_available"
 

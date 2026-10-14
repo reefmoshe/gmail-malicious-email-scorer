@@ -39,10 +39,9 @@ def test_ordinary_business_attachments_are_clean_or_minor(files):
         ("run.JS", "ATT_EXECUTABLE", 30),
         ("shortcut.lnk", "ATT_EXECUTABLE", 30),
         ("invoice.xlsm", "ATT_MACRO_DOC", 20),
-        ("files.iso", "ATT_DISK_IMAGE", 15),
-        ("receipt.html", "ATT_HTML", 15),
-        ("logo.svg", "ATT_HTML", 15),
-        ("docs.zip", "ATT_ARCHIVE", 8),
+        ("files.iso", "ATT_RISKY_FORMAT", 15),
+        ("receipt.html", "ATT_RISKY_FORMAT", 15),
+        ("logo.svg", "ATT_RISKY_FORMAT", 15),
     ],
 )
 def test_risky_file_types(name, signal, points):
@@ -64,15 +63,16 @@ def test_executable_alone_is_suspicious_not_malicious():
     assert result.verdict == "SUSPICIOUS"
 
 
-def test_right_to_left_override_is_detected_and_made_visible():
-    result = attachments_only(A("invoice‮fdp.exe"))
-    deceptive = finding(result, "ATT_DECEPTIVE_NAME")
-    assert "[U+202E]" in deceptive.evidence[0]
-    assert deceptive.score_status == "reinforcing"
+def test_right_to_left_override_cannot_hide_the_real_extension():
+    """'invoice<RLO>fdp.exe' displays as 'invoiceexe.pdf'; the real extension is still read."""
+    result = attachments_only(A("invoice\u202efdp.exe"))
+    executable = finding(result, "ATT_EXECUTABLE")
+    assert executable.counted_points == 30
+    assert "[U+202E]" in executable.evidence[0]  # hidden character made visible in the card
 
 
-def test_whitespace_padding_before_extension():
-    assert "ATT_DECEPTIVE_NAME" in counted(attachments_only(A("statement.pdf              .zip")))
+def test_ordinary_archives_are_not_flagged():
+    assert counted(attachments_only(A("docs.zip", "application/zip"))) == {}
 
 
 def test_declared_type_contradicting_the_name():

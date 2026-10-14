@@ -115,7 +115,7 @@ class LookalikeMatch:
         return " and ".join(self.techniques)
 
 
-def find_lookalike(ascii_domain: str | None, brands=None) -> LookalikeMatch | None:
+def find_lookalike(ascii_domain: str | None) -> LookalikeMatch | None:
     """Return a reliable impersonation of a protected brand, or None.
 
     Detection is binary: either a supported technique matched with enough evidence, or
@@ -134,9 +134,7 @@ def find_lookalike(ascii_domain: str | None, brands=None) -> LookalikeMatch | No
     registered = registered_domain(ascii_domain)
     if not ascii_domain or not registered:
         return None
-    brands = PROTECTED_BRANDS if brands is None else brands
-    owned = OFFICIAL_DOMAINS if brands is PROTECTED_BRANDS else {d for b in brands for d in b.owned_domains}
-    if registered in owned or registered in BENIGN_LOOKALIKE_EXCEPTIONS:
+    if registered in OFFICIAL_DOMAINS or registered in BENIGN_LOOKALIKE_EXCEPTIONS:
         return None
 
     label = to_unicode(_registered_label(registered)).casefold()
@@ -145,7 +143,7 @@ def find_lookalike(ascii_domain: str | None, brands=None) -> LookalikeMatch | No
     subdomain_labels = [to_unicode(p).casefold() for p in ascii_domain[: -len(registered)].split(".") if p]
     has_context = any(_is_context_word(p) for p in parts + subdomain_labels)
 
-    for brand in brands:
+    for brand in PROTECTED_BRANDS:
         techniques = []
         for token in brand.domain_tokens:
             token_skeleton = skeleton(token)

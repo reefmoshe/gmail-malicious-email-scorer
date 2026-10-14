@@ -8,9 +8,9 @@ EXPECTED = {
     "url": "SUSPICIOUS",
     "attachment": "SUSPICIOUS",
     "content": "LOW_RISK",
-    "bec": "SUSPICIOUS",
-    "reputation": "MALICIOUS",
-    "organization": "MALICIOUS",
+    "bec": "LOW_RISK",  # documented limitation after removing combined indicators
+    "upwind": "SUSPICIOUS",
+    "full": "MALICIOUS",
 }
 
 
