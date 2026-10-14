@@ -104,6 +104,17 @@ class Coverage(BaseModel):
     limitations: list[str]
 
 
+class Explanation(BaseModel):
+    """Plain-language wording of the engine's result. Never an input to scoring."""
+
+    source: Literal["ai", "template"]
+    summary: str = Field(max_length=600)
+    key_reasons: list[str] = Field(max_length=3)
+    recommendation: str = Field(max_length=400)
+    limitations: str | None = Field(default=None, max_length=400)
+    notice: str
+
+
 class AnalyzeResponse(BaseModel):
     analysis_mode: Literal["live"]
     score_type: Literal["heuristic_risk_score"] = "heuristic_risk_score"
@@ -118,3 +129,6 @@ class AnalyzeResponse(BaseModel):
     checks: list[CheckResult]
     coverage: Coverage
     engine_version: str
+    explanation: Explanation | None = Field(
+        default=None, description="Added after scoring; wording only, never changes the fields above"
+    )

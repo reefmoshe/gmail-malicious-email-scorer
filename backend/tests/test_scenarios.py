@@ -117,8 +117,9 @@ def test_response_contract_fields(client):
     body = analyze(client, "A <a@acme.com>", auth_results=gmail_auth("acme.com"))
     assert set(body) == {
         "analysis_mode", "score_type", "score", "verdict", "verdict_reason", "summary", "top_reasons",
-        "findings", "positive_findings", "categories", "checks", "coverage", "engine_version",
+        "findings", "positive_findings", "categories", "checks", "coverage", "engine_version", "explanation",
     }
+    assert body["explanation"]["source"] == "template"  # no LLM configured in tests
     assert body["analysis_mode"] == "live"
     assert body["score_type"] == "heuristic_risk_score"
 
