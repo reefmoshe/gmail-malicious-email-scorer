@@ -51,7 +51,7 @@ def test_legitimate_newsletter_sent_through_an_email_service(client):
         auth_results=gmail_auth("acme-store.com", spf_domain="em.sendgrid.net"),
     )
     assert body["verdict"] == "LOW_RISK"
-    assert body["score"] == 8
+    assert body["score"] == 6
 
 
 def test_forwarded_legitimate_mail(client):
@@ -71,8 +71,11 @@ def test_spoofed_bank_domain(client):
 
 def test_brand_impersonation_from_lookalike_domain(client):
     body = analyze(client, "PayPal Service <service@paypa1-secure.com>", auth_results=gmail_auth("paypa1-secure.com"))
-    assert counted(body) == {"SENDER_LOOKALIKE_DOMAIN": 15, "SENDER_BRAND_DISPLAY_MISMATCH": 10}
+    # The display name names the same brand the domain imitates: it reinforces (+5), not +10.
+    assert counted(body) == {"SENDER_LOOKALIKE_DOMAIN": 35, "SENDER_BRAND_DISPLAY_MISMATCH": 5}
+    assert body["score"] == 40
     assert body["verdict"] == "SUSPICIOUS"
+    assert "threshold" in body["verdict_reason"]  # reached by score, not by the severity floor
     assert body["positive_findings"][0]["id"] == "AUTH_DMARC_PASS"  # authenticated != trustworthy
 
 
@@ -80,7 +83,7 @@ def test_business_email_compromise_reply_diversion(client):
     """Header-only BEC evidence is weak by design: reported, but LOW_RISK until content
     analysis (financial request, urgency) is available."""
     body = analyze(client, "Dana Levi (CEO) <dana@acme.com>", reply_to="dana.levi.ceo@gmail.com", auth_results=gmail_auth("acme.com"))
-    assert counted(body) == {"SENDER_REPLYTO_MISMATCH": 8}
+    assert counted(body) == {"SENDER_REPLYTO_MISMATCH": 6}
     assert body["verdict"] == "LOW_RISK"
     assert "free personal mailbox" in body["findings"][0]["explanation"]
 
@@ -93,12 +96,12 @@ def test_combined_impersonation_without_authentication(client):
         auth_results=gmail_auth("rnicrosoft-support.com", spf="fail", dkim=None, dmarc=None),
     )
     assert counted(body) == {
-        "SENDER_LOOKALIKE_DOMAIN": 15,
-        "SENDER_REPLYTO_LOOKALIKE": 10,  # capped: sender identity is capped at 25
+        "SENDER_LOOKALIKE_DOMAIN": 35,
+        "SENDER_REPLYTO_LOOKALIKE": 10,  # capped: sender identity is capped at 45
         "AUTH_SPF_FAIL": 10,
         "AUTH_DKIM_NONE": 3,
     }
-    assert body["score"] == 38
+    assert body["score"] == 58
     assert body["verdict"] == "SUSPICIOUS"
 
 
@@ -118,3 +121,15 @@ def test_response_contract_fields(client):
     }
     assert body["analysis_mode"] == "live"
     assert body["score_type"] == "heuristic_risk_score"
+
+
+def test_malicious_requires_several_independent_strong_signals(client):
+    """Header-only MALICIOUS needs a strong impersonation AND failed authentication."""
+    body = analyze(
+        client,
+        "PayPal <service@paypa1.com>",
+        reply_to="billing@paypal-help.net",
+        auth_results=gmail_auth("paypa1.com", spf="fail", dkim=None, dmarc="fail"),
+    )
+    assert body["score"] == 70
+    assert body["verdict"] == "MALICIOUS"

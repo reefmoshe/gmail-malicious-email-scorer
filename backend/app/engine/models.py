@@ -17,6 +17,8 @@ class Detection:
     # Overrides the registry's correlation group when the correlation depends on context
     # (e.g. SPF/DKIM failures are part of the DMARC result only when DMARC was evaluated).
     group: str | None = None
+    # Brands this finding is about (e.g. {"PayPal"}); used to detect reinforcing findings.
+    subjects: frozenset[str] = frozenset()
 
 
 @dataclass

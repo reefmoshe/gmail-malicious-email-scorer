@@ -43,9 +43,16 @@ def test_unimplemented_categories_are_reported():
     assert check_status(result, "links") == "not_implemented"
 
 
-def test_unreachable_malicious_verdict_is_stated_explicitly():
+def test_max_attainable_score_with_both_categories_allows_malicious():
     result = run(sender="A <a@acme.com>", auth_results=gmail_auth("acme.com"))
-    assert result.coverage.max_attainable_score == 55
+    assert result.coverage.max_attainable_score == 75
+    assert not any("not MALICIOUS" in limitation for limitation in result.coverage.limitations)
+
+
+def test_unreachable_malicious_verdict_is_stated_explicitly():
+    """Without authentication results only sender identity (cap 45) can contribute."""
+    result = run(sender="A <a@acme.com>", auth_results=None)
+    assert result.coverage.max_attainable_score == 45
     assert any("not MALICIOUS" in limitation for limitation in result.coverage.limitations)
 
 

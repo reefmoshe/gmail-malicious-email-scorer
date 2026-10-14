@@ -13,13 +13,19 @@ def run(ctx: EmailContext) -> CheckOutcome:
     if ctx.sender:
         match = find_lookalike(ctx.sender.domain)
         if match:
-            outcome.detections.append(Detection("SENDER_LOOKALIKE_DOMAIN", [_evidence(ctx.sender.domain, match)]))
+            outcome.detections.append(
+                Detection("SENDER_LOOKALIKE_DOMAIN", [_evidence(ctx.sender.domain, match)], subjects=frozenset({match.brand}))
+            )
 
-    reply_evidence = [
-        _evidence(addr.domain, match) for addr in ctx.reply_to if (match := find_lookalike(addr.domain))
-    ]
-    if reply_evidence:
-        outcome.detections.append(Detection("SENDER_REPLYTO_LOOKALIKE", reply_evidence))
+    reply_matches = [(addr, match) for addr in ctx.reply_to if (match := find_lookalike(addr.domain))]
+    if reply_matches:
+        outcome.detections.append(
+            Detection(
+                "SENDER_REPLYTO_LOOKALIKE",
+                [_evidence(addr.domain, match) for addr, match in reply_matches],
+                subjects=frozenset(match.brand for _, match in reply_matches),
+            )
+        )
     return outcome
 
 

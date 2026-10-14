@@ -48,8 +48,14 @@ statistically validated.
    - `reply_diversion`: a look-alike Reply-To is also a mismatching Reply-To.
    - Not correlated on purpose: a look-alike sender *domain* and a brand *display name* are
      two separate deceptive choices by the sender.
-3. **Category caps** bound how much one kind of evidence can contribute (`capped` status).
-4. **Positive evidence never subtracts** (e.g. DMARC pass) - it is reported separately,
+3. **Reinforcement**: a weaker finding about the same impersonated brand as a stronger
+   finding in the same category corroborates it rather than adding independent evidence,
+   so it adds only its signal's `reinforcing_points` (status `reinforcing`). Display-name
+   claims declare 5: "PayPal Service" <service@paypa1-secure.com> = 35 (look-alike) + 5 = 40,
+   while a display name naming a *different* brand keeps its full 10. Signals without
+   `reinforcing_points` (e.g. Reply-To look-alike) are never reduced.
+4. **Category caps** bound how much one kind of evidence can contribute (`capped` status).
+5. **Positive evidence never subtracts** (e.g. DMARC pass) - it is reported separately,
    because authenticated attacker-owned domains are common.
 
 ### Verdicts
@@ -65,12 +71,12 @@ statistically validated.
 raises `LOW_RISK` to `SUSPICIOUS`, never higher. These signals are rare in legitimate mail,
 but one signal alone is never enough for `MALICIOUS`. The score itself is not changed.
 
-**Coverage and reachability.** With only authentication (cap 30) and sender identity
-(cap 25) implemented, the maximum attainable score is 55 < 70. We deliberately do **not**
-rescale the score to the implemented categories (that would inflate a single DMARC failure
-to ~45%). Instead the response reports `coverage.max_attainable_score` and states that a
-`MALICIOUS` verdict requires evidence from links, attachments or content. Header anomalies
-alone justify caution, not a malicious verdict.
+**Coverage and reachability.** Authentication (cap 30) + sender identity (cap 45) can reach
+75, so a header-only `MALICIOUS` verdict is possible but requires a strong impersonation
+*and* failed authentication (e.g. look-alike domain + DMARC fail + Reply-To look-alike = 70).
+We deliberately do **not** rescale the score to the implemented categories. When a category
+could not run (e.g. no authentication results), the response reports
+`coverage.max_attainable_score` and states when `MALICIOUS` is unreachable.
 
 **Detection confidence** is not reported: without labelled data we cannot compute a
 meaningful confidence, so we report *analysis completeness* (which checks ran) instead.
@@ -84,12 +90,14 @@ meaningful confidence, so we report *analysis completeness* (which checks ran) i
 | `AUTH_SPF_SOFTFAIL` | 5 | low | Weaker `~all` assertion |
 | `AUTH_DKIM_FAIL` | 8 | med | Only if no signature passed. FP: mail modified by list servers |
 | `AUTH_DKIM_NONE` | 3 | low | Many small senders do not sign |
-| `SENDER_LOOKALIKE_DOMAIN` | 15 | high | Homoglyphs/IDN, typos, TLD swap, combosquatting, brand-as-subdomain |
-| `SENDER_REPLYTO_LOOKALIKE` | 15 | high | Same detection on Reply-To |
-| `SENDER_BRAND_DISPLAY_MISMATCH` | 10 | med | FP: brands sending via third parties, resellers |
-| `SENDER_DISPLAY_HAS_ADDRESS` | 10 | med | Address in display name from another domain |
-| `SENDER_REPLYTO_MISMATCH` | 8 | low | FP: newsletters, ticketing; free-mailbox diversion called out |
-| `SENDER_FREEMAIL_ORG_CLAIM` | 8 | low | FP: freelancers using e.g. "Support" in their name |
+| `SENDER_LOOKALIKE_DOMAIN` | 35 | high | Homoglyphs/IDN, typos, TLD swap, combosquatting, brand-as-subdomain |
+| `SENDER_REPLYTO_LOOKALIKE` | 20 | high | Same detection on Reply-To |
+| `SENDER_BRAND_DISPLAY_MISMATCH` | 10 (5 reinforcing) | med | FP: brands sending via third parties, resellers |
+| `SENDER_DISPLAY_HAS_ADDRESS` | 10 (5 reinforcing) | med | Address in display name from another domain |
+| `SENDER_REPLYTO_MISMATCH` | 6 | low | FP: newsletters, ticketing; free-mailbox diversion called out |
+| `SENDER_FREEMAIL_ORG_CLAIM` | 12 (5 reinforcing) | med | FP: freelancers using e.g. "Support" in their name |
+
+Sender identity category cap: 45.
 
 **Authentication trust model.** Anyone can add an `Authentication-Results` header. Only
 results whose authserv-id is `mx.google.com` are used, and results whose `header.from`

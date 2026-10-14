@@ -29,13 +29,17 @@ class Signal:
     # Signals in the same group describe the same underlying behaviour: only the
     # strongest one is counted. Defaults to the signal's own id (independent).
     group: str | None = None
+    # Set for signals that can corroborate a stronger finding about the same impersonated
+    # brand (e.g. a display name naming the brand a look-alike domain imitates). In that
+    # case the signal adds only this many points instead of its full weight.
+    reinforcing_points: int | None = None
 
 
 CATEGORIES: dict[str, Category] = {
     c.id: c
     for c in (
         Category("authentication", "Sender authentication", 30),
-        Category("sender_identity", "Sender identity", 25),
+        Category("sender_identity", "Sender identity", 45),
         Category("urls", "Links", 35),
         Category("attachments", "Attachments", 35),
         Category("content", "Message content", 15),
@@ -77,14 +81,15 @@ _SIGNALS = (
     ),
     # --- Sender identity ------------------------------------------------------------
     Signal(
-        "SENDER_LOOKALIKE_DOMAIN", "sender_identity", 15, "high",
-        "Sender domain imitates a known brand",
+        "SENDER_LOOKALIKE_DOMAIN", "sender_identity", 35, "high",
+        "Sender domain resembles a known brand",
         "The sending domain closely resembles a well-known brand's domain but is not one of "
-        "its official domains. Look-alike domains are a common phishing technique.",
+        "its official domains. Look-alike domains are a common phishing technique and are "
+        "rarely used by legitimate senders, but resemblance alone is not proof of intent.",
     ),
     Signal(
-        "SENDER_REPLYTO_LOOKALIKE", "sender_identity", 15, "high",
-        "Replies go to a domain imitating a known brand",
+        "SENDER_REPLYTO_LOOKALIKE", "sender_identity", 20, "high",
+        "Replies go to a domain resembling a known brand",
         "Replies to this message would be sent to a domain that resembles a well-known "
         "brand but is not one of its official domains.",
         group="reply_diversion",
@@ -95,6 +100,7 @@ _SIGNALS = (
         "The sender's display name mentions a known brand, but the email address is not "
         "from that brand's official domains.",
         group="display_name_claim",
+        reinforcing_points=5,
     ),
     Signal(
         "SENDER_DISPLAY_HAS_ADDRESS", "sender_identity", 10, "medium",
@@ -102,9 +108,10 @@ _SIGNALS = (
         "The display name shows an email address from a different domain than the one the "
         "message was actually sent from. This is a common way to disguise the real sender.",
         group="display_name_claim",
+        reinforcing_points=5,
     ),
     Signal(
-        "SENDER_REPLYTO_MISMATCH", "sender_identity", 8, "low",
+        "SENDER_REPLYTO_MISMATCH", "sender_identity", 6, "low",
         "Replies go to a different domain",
         "Replying to this message would send your answer to a different domain than the "
         "sender's. Newsletters and support systems do this legitimately; fraudsters use it "
@@ -112,11 +119,12 @@ _SIGNALS = (
         group="reply_diversion",
     ),
     Signal(
-        "SENDER_FREEMAIL_ORG_CLAIM", "sender_identity", 8, "low",
+        "SENDER_FREEMAIL_ORG_CLAIM", "sender_identity", 12, "medium",
         "Free email account presents itself as an organization",
         "The message comes from a free personal email service, but the sender name presents "
         "it as a company, bank or internal department.",
         group="display_name_claim",
+        reinforcing_points=5,
     ),
 )
 

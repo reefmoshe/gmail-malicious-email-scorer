@@ -42,7 +42,7 @@ class FindingOut(BaseModel):
     evidence: list[str]
     points: int = Field(description="Nominal weight of the signal")
     counted_points: int = Field(description="Points actually added to the score")
-    score_status: Literal["counted", "correlated", "capped"]
+    score_status: Literal["counted", "correlated", "reinforcing", "capped"]
     note: str | None = None
 
 

@@ -56,6 +56,7 @@ def test_edit_distance_counts_adjacent_swap_as_one():
     [
         ("paypa1.com", "PayPal", "look-alike characters"),
         ("xn--pypal-4ve.com", "PayPal", "look-alike characters"),
+        ("xn--80ak6aa92e.com", "Apple", "look-alike characters"),  # "apple" spelled entirely in Cyrillic
         ("rnicrosoft.com", "Microsoft", "look-alike characters"),
         ("paypal.net", "PayPal", "different domain ending"),
         ("paypall.com", "PayPal", "typo"),
@@ -93,3 +94,13 @@ def test_detects_lookalikes(domain, brand, technique_fragment):
 )
 def test_does_not_flag_legitimate_or_unrelated_domains(domain):
     assert find_lookalike(domain) is None
+
+
+@pytest.mark.parametrize(
+    "domain",
+    ["ｐａｙｐａｌ.com", "PAYPAL.COM.", "email.paypal.com", "xn--zz.com", "xn--e1afmkfd.com"],  # last: "пример" (example)
+)
+def test_unicode_and_punycode_edge_cases_do_not_misfire(domain):
+    """Full-width letters normalize to the official domain; invalid or unrelated
+    punycode neither crashes nor matches a brand."""
+    assert find_lookalike(normalize_domain(domain)) is None

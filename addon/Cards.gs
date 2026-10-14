@@ -93,7 +93,11 @@ function buildReasonsSection_(findings) {
   }
   var section = CardService.newCardSection().setHeader('Why');
   counted.forEach(function (f) {
-    section.addWidget(findingWidget_(f, f.severity.toUpperCase() + ' · +' + f.counted_points + ' points'));
+    var label = f.severity.toUpperCase() + ' · +' + f.counted_points + ' points';
+    if (f.score_status !== 'counted' && f.note) {
+      label += ' · ' + f.note;  // e.g. reinforcing or capped: explain the reduced points
+    }
+    section.addWidget(findingWidget_(f, label));
   });
   context.forEach(function (f) {
     section.addWidget(findingWidget_(f, 'Counted once · ' + (f.note || '')));
