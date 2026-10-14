@@ -1,182 +1,130 @@
-# Detection engine design
+# Detection engine reference
 
-## Principles
+The complete list of signals, weights and rules. For the overview, see the [README](../README.md).
 
-1. **Unusual is not malicious.** Many signals (a different Reply-To, an SPF failure) are common
-   in legitimate mail. Weights reflect how *specific* a signal is to malicious mail.
-2. **Missing data is never evidence of safety.** Checks that cannot run report
-   `not_available` / `failed` / `not_implemented`, and the response says what was not analyzed.
-3. **Count each behaviour once.** Correlated signals are grouped; only the strongest counts.
-4. **Explain everything.** Every point in the score maps to a finding with evidence.
-5. **Least data, no outbound calls.** The backend analyzes header metadata only, makes no DNS/HTTP
-   requests, stores nothing, and logs no email content.
+Every weight is an **explainable security heuristic**, chosen by asking: how strong is the
+evidence, how often does it appear in legitimate mail, is it independent of other findings, and
+what is the impact if it is true. No weight is statistically calibrated. The score is a heuristic
+risk score, not a probability.
 
 ## Pipeline
 
 ```
-add-on (Extract.gs)  ->  POST /analyze  ->  build_context()      parse once, never raises
-                                        ->  run each check        isolated; exceptions -> "failed"
-                                        ->  score()               merge, correlate, cap, sum
-                                        ->  decide_verdict()      thresholds + severity floor
-                                        ->  response              findings, positives, coverage
+build_context()  ->  run each check in isolation  ->  score()  ->  decide_verdict()  ->  explain()
+parse once,          exception -> "failed",          dedup,        thresholds +        wording only,
+never raises         other checks continue            groups,       severity floor      after scoring
+                                                      reinforcement,
+                                                      caps
 ```
 
-| File | Responsibility |
-|---|---|
-| `engine/signals.py` | Single source of truth: categories, caps, signal weights, wording, correlation groups |
-| `engine/checks/*.py` | One module per check; returns a `CheckOutcome` (status, detections, positives) |
-| `engine/checks/__init__.py` | Check registry (adding a check = one line) |
-| `engine/context.py` | Safe parsing of untrusted header values |
-| `engine/domains.py` | Registered domains (offline Public Suffix List), IDN, confusables, look-alikes |
-| `engine/auth_results.py` | Tolerant `Authentication-Results` parser |
-| `engine/brands.py` | Protected brands, free-mail providers, organizational role terms |
-| `engine/scoring.py` | Scoring and verdict rules |
+Check statuses: `completed`, `failed`, `not_applicable` (e.g. no attachments), `not_available`
+(data missing, e.g. no authentication results), `not_implemented`. Missing data never adds points
+and is never reported as "safe".
 
-## Scoring
+## Scoring rules (`engine/scoring.py`)
 
-Score = sum over categories of `min(cap, sum of counted findings)`, capped at 100.
-It is a **heuristic risk score**, not a probability. Weights are initial heuristics, not
-statistically validated.
+1. **Dedup** - a signal id counts once; repeated detections merge their evidence (max 5 examples).
+2. **Correlation groups** - signals describing one behaviour share a group; only the strongest
+   counts, the others are shown as `correlated` with 0 points.
+3. **Reinforcement** - a weaker finding about the *same* brand or file as a stronger finding in the
+   same category corroborates it: it adds only its `reinforcing_points` (5), status `reinforcing`.
+4. **Category caps** - each kind of evidence has a ceiling; the excess is marked `capped`.
+5. **Sum, capped at 100.** Positive evidence (e.g. DMARC pass) is reported but never subtracted,
+   because attackers authenticate their own look-alike domains.
 
-1. **Dedup by signal id**: a signal counts once; repeated detections merge their evidence.
-2. **Correlation groups**: signals describing the same underlying behaviour share a group;
-   only the strongest counts and the others are shown as `correlated` (0 points).
-   - `dmarc`: DMARC is computed from SPF + DKIM + alignment, so when Gmail evaluated DMARC
-     its result supersedes the component failures.
-   - `display_name_claim`: brand-in-name, address-in-name and free-mail-org-claim all
-     interpret the same display name.
-   - `reply_diversion`: a look-alike Reply-To is also a mismatching Reply-To.
-   - Not correlated on purpose: a look-alike sender *domain* and a brand *display name* are
-     two separate deceptive choices by the sender.
-3. **Reinforcement**: a weaker finding about the same impersonated brand as a stronger
-   finding in the same category corroborates it rather than adding independent evidence,
-   so it adds only its signal's `reinforcing_points` (status `reinforcing`). Display-name
-   claims declare 5: "PayPal Service" <service@paypa1-secure.com> = 35 (look-alike) + 5 = 40,
-   while a display name naming a *different* brand keeps its full 10. Signals without
-   `reinforcing_points` (e.g. Reply-To look-alike) are never reduced.
-4. **Category caps** bound how much one kind of evidence can contribute (`capped` status).
-5. **Positive evidence never subtracts** (e.g. DMARC pass) - it is reported separately,
-   because authenticated attacker-owned domains are common.
+**Verdicts** - 0-29 `LOW_RISK` (worded "no strong warning signs", never "safe"), 30-69
+`SUSPICIOUS`, 70-100 `MALICIOUS`; `INCONCLUSIVE` with score `null` when no check could run.
+**Severity floor** - a single counted high-severity finding raises `LOW_RISK` to `SUSPICIOUS`,
+never higher. **Coverage** - the score is never rescaled to the checks that ran;
+`coverage.max_attainable_score` and `coverage.limitations` say what could not be assessed.
 
-### Verdicts
+## Signals
 
-| Score | Verdict |
-|---|---|
-| 0-29 | `LOW_RISK` (worded as "no strong warning signs", never "safe") |
-| 30-69 | `SUSPICIOUS` |
-| 70-100 | `MALICIOUS` |
-| no check could run | `INCONCLUSIVE` (score `null`) |
+### Sender authentication - cap 30 (`checks/authentication.py`)
 
-**Severity floor:** a single counted *high*-severity finding (DMARC fail, look-alike domain)
-raises `LOW_RISK` to `SUSPICIOUS`, never higher. These signals are rare in legitimate mail,
-but one signal alone is never enough for `MALICIOUS`. The score itself is not changed.
-
-**Coverage and reachability.** Authentication (cap 30) + sender identity (cap 45) can reach
-75, so a header-only `MALICIOUS` verdict is possible but requires a strong impersonation
-*and* failed authentication (e.g. look-alike domain + DMARC fail + Reply-To look-alike = 70).
-We deliberately do **not** rescale the score to the implemented categories. When a category
-could not run (e.g. no authentication results), the response reports
-`coverage.max_attainable_score` and states when `MALICIOUS` is unreachable.
-
-**Detection confidence** is not reported: without labelled data we cannot compute a
-meaningful confidence, so we report *analysis completeness* (which checks ran) instead.
-
-## Phase 1 signals (implemented)
-
-| Signal | Pts | Sev | Notes / false positives |
+| Signal | Pts | Sev | Notes |
 |---|---|---|---|
-| `AUTH_DMARC_FAIL` | 25 | high | Only from Gmail-stamped results. FP: forwarding, mailing lists, misconfigured senders |
-| `AUTH_SPF_FAIL` | 10 | med | Only scored when DMARC was not evaluated. FP: forwarding |
-| `AUTH_SPF_SOFTFAIL` | 5 | low | Weaker `~all` assertion |
-| `AUTH_DKIM_FAIL` | 8 | med | Only if no signature passed. FP: mail modified by list servers |
-| `AUTH_DKIM_NONE` | 3 | low | Many small senders do not sign |
-| `SENDER_LOOKALIKE_DOMAIN` | 35 | high | Homoglyphs/IDN, typos, TLD swap, combosquatting, brand-as-subdomain |
-| `SENDER_REPLYTO_LOOKALIKE` | 20 | high | Same detection on Reply-To |
-| `SENDER_BRAND_DISPLAY_MISMATCH` | 10 (5 reinforcing) | med | FP: brands sending via third parties, resellers |
-| `SENDER_DISPLAY_HAS_ADDRESS` | 10 (5 reinforcing) | med | Address in display name from another domain |
-| `SENDER_REPLYTO_MISMATCH` | 6 | low | FP: newsletters, ticketing; free-mailbox diversion called out |
-| `SENDER_FREEMAIL_ORG_CLAIM` | 12 (5 reinforcing) | med | FP: freelancers using e.g. "Support" in their name |
+| `AUTH_DMARC_FAIL` | 25 | high | Group `dmarc` when Gmail evaluated DMARC: SPF/DKIM failures are its components and are correlated into it |
+| `AUTH_SPF_FAIL` / `AUTH_SPF_SOFTFAIL` | 10 / 5 | med / low | Scored independently only when there is no DMARC verdict (forwarding breaks SPF) |
+| `AUTH_DKIM_FAIL` / `AUTH_DKIM_NONE` | 8 / 3 | med / low | Only if no signature passed |
 
-Sender identity category cap: 45.
+Trust model: only results stamped by Gmail (`authserv-id = mx.google.com`) whose `header.from`
+matches the From domain are used - anyone can add an `Authentication-Results` header.
 
-**Authentication trust model.** Anyone can add an `Authentication-Results` header. Only
-results whose authserv-id is `mx.google.com` are used, and results whose `header.from`
-does not match the From domain are ignored. Gmail prepends its own header, and
-`getHeader()` returns the first occurrence; a stricter variant (all headers via
-`getRawContent()`) is listed below.
+### Sender identity - cap 45 (`checks/lookalike.py`, `display_name.py`, `reply_to.py`)
 
-**Look-alike detection is binary.** A supported technique either matches with enough
-evidence (35 points, whatever the technique) or nothing is reported - there is no
-lower-weight tier. The matched techniques are kept as evidence only. Safeguards:
-- **Ownership**: official domains and *verified* brand-owned domains (registrant organization
-  confirmed in the registrar's RDAP record, e.g. google-analytics.com -> Google LLC) are never
-  flagged. Ownership is never inferred from the name.
-- **Benign exceptions** (`BENIGN_LOOKALIKE_EXCEPTIONS`): similar-looking domains of unrelated
-  owners (leumi-card.co.il, paypay.ne.jp, unwind.com). They are exempt from look-alike
-  detection only and are *not* treated as the brand.
-- **Whole labels only**: `applebees.com` is not Apple; registered domains via the PSL.
-- **Realistic typos only**: one missing/extra/swapped letter or an adjacent-key substitution
-  on names of 6+ characters ("unwind" vs "upwind" and "paypay" vs "paypal" are not typos).
-- **Combosquatting and brand-as-subdomain require an account/security word**
-  (`paypal-secure-login`, `paypal.secure-login.xyz`) or the full official domain embedded
-  (`paypal.com.account-verify.net`); `apple-store` or `microsoft-events` is not enough.
-- **Dictionary-word brands** (apple, amazon, upwind) are not flagged merely for using another
-  domain ending (`upwind.com`).
-- **IDN**: compared in a confusable skeleton, shown in punycode in evidence.
-
-## Phase 2 (planned unless marked implemented)
-
-None of the following needs a new OAuth scope: `gmail.addons.current.message.readonly`
-already grants read access to the open message's body and attachments. Each item still
-changes what data leaves Gmail, so each is a privacy decision.
-
-### URLs (cap 35) - implemented
-
-- **Data**: the add-on parses the HTML body (`<a href>`) and plain-text body for up to 50 links
-  and sends only `scheme://[user@]host[:port]` per link - never the path, query or fragment
-  (password-reset tokens, tracking ids), never a password in the userinfo. The visible link
-  text is sent only when it is itself a URL/domain ("Click here", greetings, names stay in
-  Gmail). No new OAuth scope. `links: null` means "not collected" (older add-on, extraction
-  error) and is reported as `not_available`, never as "no links".
-- **Analysis**: `urllib.parse` / `ipaddress` only - links are never fetched or followed.
-
-| Signal | Pts | Sev | Notes / false positives |
+| Signal | Pts | Sev | Group / notes |
 |---|---|---|---|
-| `URL_TEXT_HREF_MISMATCH` | 25 | high | Text is a domain/URL and the destination's registered domain differs. Not raised for the same organization, domains owned by the same brand, or click-tracking/security rewriters (Mailchimp, SendGrid, Safe Links, Proofpoint...) |
-| `URL_LOOKALIKE_DOMAIN` | 15 (5 reinforcing) | high | Same binary detector as sender look-alikes. Not raised for the sender's own registered domain (already scored under sender identity) |
-| `URL_IP_HOST` | 15 | med | Dotted, IPv6, and disguised integer/hex/octal notations. FP: internal tools, routers |
+| `SENDER_LOOKALIKE_DOMAIN` | 35 | high | Binary detector below; any technique = 35 |
+| `SENDER_REPLYTO_LOOKALIKE` | 20 | high | `reply_diversion` |
+| `SENDER_FREEMAIL_ORG_CLAIM` | 12 (5) | med | `display_name_claim`, reinforcing |
+| `SENDER_BRAND_DISPLAY_MISMATCH` | 10 (5) | med | `display_name_claim`, reinforcing |
+| `SENDER_DISPLAY_HAS_ADDRESS` | 10 (5) | med | `display_name_claim`, reinforcing |
+| `SENDER_REPLYTO_MISMATCH` | 6 | low | `reply_diversion`; free-mailbox diversion called out in the text |
+
+Example: "PayPal Service" <service@paypa1-secure.com> = 35 (look-alike) + 5 (name reinforces the
+same brand) = 40. A name claiming a *different* brand keeps its full 10.
+
+**Look-alike detection (`domains.py`) is binary**: a technique matches with enough evidence, or
+nothing is reported. Techniques: look-alike characters and IDN homographs (compared in a
+confusable "skeleton"), realistic typos (one adjacent-key, missing, extra or swapped letter on
+names of 6+ characters), the brand under another domain ending, the brand plus an account/security
+word (`paypal-secure-login`), the brand as a subdomain (`paypal.com.account-verify.net`).
+Safeguards: official and RDAP-verified brand-owned domains are never flagged; a separate list of
+benign exceptions (unrelated owners - not treated as the brand); whole-label comparison
+(`applebees.com` is not Apple); no "other ending" match for dictionary-word brands (`upwind.com`);
+registered domains from the offline Public Suffix List; punycode shown in evidence.
+
+### Links - cap 35 (`checks/links.py`, `urls.py`)
+
+| Signal | Pts | Sev | Notes |
+|---|---|---|---|
+| `URL_TEXT_HREF_MISMATCH` | 25 | high | Visible text is a URL/domain and the destination's registered domain differs. Not raised for the same organization, brand-owned pairs, or click-tracking / security link rewriters. Group `obscured_destination` |
+| `URL_LOOKALIKE_DOMAIN` | 15 (5) | high | Same detector; not raised for the sender's own domain (already scored) |
+| `URL_IP_HOST` | 15 | med | Incl. integer / hex / octal-disguised addresses |
 | `URL_USERINFO_AT` | 15 | high | `https://paypal.com@evil.example` |
-| `URL_DECEPTIVE_STRUCTURE` | 8 | med | 5+ subdomain levels, or mixed alphabets in a label (when not already a brand look-alike) |
-| `URL_SUSPICIOUS_TLD` | 5 | low | Static list of frequently abused TLDs |
-| `URL_SHORTENER` | 5 | low | Correlated with the text mismatch (both hide the destination) |
+| `URL_DECEPTIVE_STRUCTURE` | 8 | med | 5+ subdomain levels, or mixed alphabets in one label |
+| `URL_SUSPICIOUS_TLD` | 5 | low | Static list of frequently abused endings |
+| `URL_SHORTENER` | 5 | low | Group `obscured_destination` |
 | `URL_PLAIN_HTTP` | 3 | low | |
 
-Each signal counts once however many links trigger it (evidence capped at 5 examples).
-Example: look-alike sender + "PayPal Service" name + link text "www.paypal.com" leading to the
-sender's own look-alike domain = 35 + 5 + 25 = 65 (SUSPICIOUS); leading to a *different*
-look-alike = 35 + 5 + 25 + 5 = 70 (MALICIOUS).
+Links are parsed as text only and are never fetched.
 
-**Limitations**: link parameters are not inspected (open redirects); anchors without a
-closing tag within 2,000 characters are skipped; reputation of destinations is not checked.
+### Attachments - cap 35, metadata only (`checks/attachments.py`)
 
-### Attachments (cap 35)
-- **Add-on**: `getAttachments({includeInlineImages: false})` -> name, content type, size only.
-  Never `getBytes()`.
-- Signals: executable / script / disk-image / shortcut types, macro-enabled Office, HTML/SVG
-  attachments (credential phishing), double extensions, extension vs declared type mismatch,
-  archives. Metadata is not proof: no override, and Gmail already blocks many executables.
+| Signal | Pts | Sev | Notes |
+|---|---|---|---|
+| `ATT_EXECUTABLE` | 30 | high | Programs, scripts, installers, shortcuts |
+| `ATT_MACRO_DOC` | 20 | med | Macro-enabled Office formats |
+| `ATT_RISKY_FORMAT` | 15 | med | Web pages (html, svg) and disk images (iso, img, vhd) |
+| `ATT_DOUBLE_EXTENSION` | 15 (5) | high | `invoice.pdf.exe`; reinforces the type finding for the same file |
+| `ATT_TYPE_MISMATCH` | 5 (5) | low | Extension family vs declared MIME type; generic types ignored |
 
-### Content (cap 15)
-- Needs body text. Options: (A) send truncated plain text (<= 10k chars), processed in memory,
-  never logged; (B) compute features in Apps Script and send only matched categories (keeps the
-  body inside Google, but splits detection logic). Recommendation: A, disclosed in the README.
-- Contextual rules (e.g. credential noun + action verb + link in the same sentence), English
-  and Hebrew phrase lists; the low cap bounds keyword noise.
+Extensions are read the way Windows reads them: hidden/right-to-left characters removed and
+trailing dots or spaces stripped. An executable alone is `SUSPICIOUS` (max 35), never `MALICIOUS`.
 
-### Other improvements
-- All `Authentication-Results` headers via `getRawContent()` (same scope, heavier call).
-- Protect the recipient's own organization domain: requires the `userinfo.email` scope
-  (new consent) and only helps Workspace accounts.
-- Weight review: header-only BEC (Reply-To diverted to a free mailbox) scores only 8 with the
-  current weights. Candidate: a dedicated `SENDER_REPLYTO_FREEMAIL` signal in the
-  `reply_diversion` group.
+### Message content - cap 15, English and Hebrew (`content.py`, `checks/content.py`)
+
+| Signal | Pts | Sev | Rule |
+|---|---|---|---|
+| `CONTENT_CREDENTIAL_REQUEST` | 10 | med | Credential word + action verb in one sentence |
+| `CONTENT_FINANCIAL_REQUEST` | 10 | med | Payment word + action verb, or bank details + change word |
+| `CONTENT_PRESSURE` | 5 | low | Urgency or account threat - only reported next to a request |
+
+Single words never count. The low cap keeps language - which legitimate mail also uses - from
+dominating the score.
+
+## Explanation layer (`explain/`)
+
+Runs after scoring on a deep copy and returns wording only. The template explanation is always
+available; the LLM explanation is used when `ANTHROPIC_API_KEY` is set. The LLM receives trusted
+engine fields and redacted evidence in a separate `untrusted_evidence` field (no message text,
+mailbox names or display names), answers in a JSON schema, and its output is rejected - falling
+back to the template - on certainty claims, a different score, refusals, timeouts or invalid JSON.
+The system prompt is versioned in `explain/system_prompt.md`.
+
+## Deliberately out of scope
+
+Preserved in git (`full-scope-v0.4.0` tag) and listed as future work in the README:
+Google Safe Browsing reputation, configurable organization-domain protection, and combined
+"request + identity" indicators (business email compromise).
