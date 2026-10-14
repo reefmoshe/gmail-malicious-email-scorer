@@ -41,7 +41,9 @@ def test_all_signals_together_respect_caps():
     result = score([Detection(s, ["e"]) for s in SIGNALS])
     assert result.category_scores["authentication"] <= 30
     assert result.category_scores["sender_identity"] <= 45
-    assert result.total == 75
+    assert result.category_scores["urls"] <= 35
+    assert sum(result.category_scores.values()) == 110
+    assert result.total == 100  # final score capped at 100
 
 
 def test_no_detections_scores_zero():

@@ -100,7 +100,8 @@ function buildReasonsSection_(findings) {
     section.addWidget(findingWidget_(f, label));
   });
   context.forEach(function (f) {
-    section.addWidget(findingWidget_(f, 'Counted once · ' + (f.note || '')));
+    var prefix = f.score_status === 'correlated' ? 'Already counted' : 'Not added';
+    section.addWidget(findingWidget_(f, prefix + ' · ' + (f.note || '')));
   });
   return section
     .setCollapsible(counted.length + context.length > 3)

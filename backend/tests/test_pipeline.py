@@ -36,11 +36,11 @@ def test_unimplemented_categories_are_reported():
     assert statuses == {
         "authentication": "completed",
         "sender_identity": "completed",
-        "urls": "not_implemented",
+        "urls": "not_available",  # implemented, but this request carries no link data
         "attachments": "not_implemented",
         "content": "not_implemented",
     }
-    assert check_status(result, "links") == "not_implemented"
+    assert check_status(result, "attachments") == "not_implemented"
 
 
 def test_max_attainable_score_with_both_categories_allows_malicious():

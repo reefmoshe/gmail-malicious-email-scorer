@@ -12,6 +12,15 @@ CheckStatus = Literal["completed", "failed", "not_applicable", "not_available", 
 CategoryStatus = Literal["completed", "partial", "failed", "not_applicable", "not_available", "not_implemented"]
 
 
+class Link(BaseModel):
+    """One link, already minimized by the add-on: scheme://[user@]host[:port] only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(max_length=600)
+    text: str | None = Field(default=None, max_length=200, description="Only when the text is a URL/domain")
+
+
 class EmailMessage(BaseModel):
     """Minimal metadata extracted by the add-on from the currently opened email."""
 
@@ -24,6 +33,9 @@ class EmailMessage(BaseModel):
     date: str | None = Field(default=None, max_length=100)
     auth_results: str | None = Field(
         default=None, max_length=5000, description="Raw Authentication-Results header"
+    )
+    links: list[Link] | None = Field(
+        default=None, max_length=50, description="None = not collected (older add-on); [] = no links"
     )
 
 

@@ -128,7 +128,60 @@ _SIGNALS = (
     ),
 )
 
-SIGNALS: dict[str, Signal] = {s.id: s for s in _SIGNALS}
+_URL_SIGNALS = (
+    Signal(
+        "URL_TEXT_HREF_MISMATCH", "urls", 25, "high",
+        "Link text shows a different website than the real destination",
+        "A link displays one web address but actually leads somewhere else. This is a classic "
+        "way to send people to a fake login page.",
+        group="obscured_destination",
+    ),
+    Signal(
+        "URL_LOOKALIKE_DOMAIN", "urls", 15, "high",
+        "Link leads to a website resembling a known brand",
+        "A link points to a domain that closely resembles a well-known brand but is not one of "
+        "its official domains.",
+        reinforcing_points=5,
+    ),
+    Signal(
+        "URL_IP_HOST", "urls", 15, "medium",
+        "Link leads to a bare numeric address",
+        "A link points to a numeric internet address instead of a named website. Legitimate "
+        "companies almost always use named websites in their emails.",
+    ),
+    Signal(
+        "URL_USERINFO_AT", "urls", 15, "high",
+        "Link uses the @ trick to disguise its destination",
+        "Everything before the @ in a web address is ignored by the browser, so a link can start "
+        "with a trusted name while opening a different website.",
+    ),
+    Signal(
+        "URL_DECEPTIVE_STRUCTURE", "urls", 8, "medium",
+        "Link address has a deceptive structure",
+        "The web address mixes alphabets or hides the real website behind many sub-levels, "
+        "techniques used to make an address look trustworthy.",
+    ),
+    Signal(
+        "URL_SUSPICIOUS_TLD", "urls", 5, "low",
+        "Link uses a domain ending often abused",
+        "The website's domain ending is frequently used for abuse. Many legitimate sites use it "
+        "too, so this is a weak signal on its own.",
+    ),
+    Signal(
+        "URL_SHORTENER", "urls", 5, "low",
+        "Link uses a URL shortener",
+        "A shortened link hides its real destination until it is opened. Marketing emails use "
+        "them legitimately as well.",
+        group="obscured_destination",
+    ),
+    Signal(
+        "URL_PLAIN_HTTP", "urls", 3, "low",
+        "Unencrypted link",
+        "A link uses http instead of https, so the connection is not encrypted.",
+    ),
+)
+
+SIGNALS: dict[str, Signal] = {s.id: s for s in _SIGNALS + _URL_SIGNALS}
 
 # Verdict thresholds on the 0-100 heuristic risk score.
 SUSPICIOUS_THRESHOLD = 30

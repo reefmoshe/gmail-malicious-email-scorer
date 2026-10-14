@@ -124,24 +124,40 @@ lower-weight tier. The matched techniques are kept as evidence only. Safeguards:
   domain ending (`upwind.com`).
 - **IDN**: compared in a confusable skeleton, shown in punycode in evidence.
 
-## Phase 2 (planned, not implemented)
+## Phase 2 (planned unless marked implemented)
 
 None of the following needs a new OAuth scope: `gmail.addons.current.message.readonly`
 already grants read access to the open message's body and attachments. Each item still
 changes what data leaves Gmail, so each is a privacy decision.
 
-### URLs (cap 35)
-- **Add-on**: parse `message.getBody()` for up to 50 `<a href>` + visible text (bounded input,
-  hrefs <= 2048 chars). Strip query strings and fragments before sending (they can carry
-  personal tokens); trade-off: open-redirect parameters are not inspected.
-- **Backend**: `urllib.parse` only - links are never fetched or followed.
-  `URL_TEXT_HREF_MISMATCH` only when the visible text is itself a URL/domain (not "click here");
-  ESP click-tracking rewrites links in legitimate newsletters, so tracker domains need care.
-  Reuse `find_lookalike` for `URL_LOOKALIKE_DOMAIN`; static lists for shorteners and TLDs.
-- **Reputation (optional)**: Google Safe Browsing (API key in Render env; prefer the hash-prefix
-  Update API so full URLs are not disclosed). VirusTotal is unsuitable: submitted URLs become
-  visible to its community, and rate limits are low. A confirmed Safe Browsing match is the only
-  candidate for the score override to 90. Strict timeout; a failed lookup is `failed`, not clean.
+### URLs (cap 35) - implemented
+
+- **Data**: the add-on parses the HTML body (`<a href>`) and plain-text body for up to 50 links
+  and sends only `scheme://[user@]host[:port]` per link - never the path, query or fragment
+  (password-reset tokens, tracking ids), never a password in the userinfo. The visible link
+  text is sent only when it is itself a URL/domain ("Click here", greetings, names stay in
+  Gmail). No new OAuth scope. `links: null` means "not collected" (older add-on, extraction
+  error) and is reported as `not_available`, never as "no links".
+- **Analysis**: `urllib.parse` / `ipaddress` only - links are never fetched or followed.
+
+| Signal | Pts | Sev | Notes / false positives |
+|---|---|---|---|
+| `URL_TEXT_HREF_MISMATCH` | 25 | high | Text is a domain/URL and the destination's registered domain differs. Not raised for the same organization, domains owned by the same brand, or click-tracking/security rewriters (Mailchimp, SendGrid, Safe Links, Proofpoint...) |
+| `URL_LOOKALIKE_DOMAIN` | 15 (5 reinforcing) | high | Same binary detector as sender look-alikes. Not raised for the sender's own registered domain (already scored under sender identity) |
+| `URL_IP_HOST` | 15 | med | Dotted, IPv6, and disguised integer/hex/octal notations. FP: internal tools, routers |
+| `URL_USERINFO_AT` | 15 | high | `https://paypal.com@evil.example` |
+| `URL_DECEPTIVE_STRUCTURE` | 8 | med | 5+ subdomain levels, or mixed alphabets in a label (when not already a brand look-alike) |
+| `URL_SUSPICIOUS_TLD` | 5 | low | Static list of frequently abused TLDs |
+| `URL_SHORTENER` | 5 | low | Correlated with the text mismatch (both hide the destination) |
+| `URL_PLAIN_HTTP` | 3 | low | |
+
+Each signal counts once however many links trigger it (evidence capped at 5 examples).
+Example: look-alike sender + "PayPal Service" name + link text "www.paypal.com" leading to the
+sender's own look-alike domain = 35 + 5 + 25 = 65 (SUSPICIOUS); leading to a *different*
+look-alike = 35 + 5 + 25 + 5 = 70 (MALICIOUS).
+
+**Limitations**: link parameters are not inspected (open redirects); anchors without a
+closing tag within 2,000 characters are skipped; reputation of destinations is not checked.
 
 ### Attachments (cap 35)
 - **Add-on**: `getAttachments({includeInlineImages: false})` -> name, content type, size only.
