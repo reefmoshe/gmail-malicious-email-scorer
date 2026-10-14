@@ -30,17 +30,26 @@ def test_no_usable_data_is_inconclusive_not_safe():
     assert result.score is None
 
 
-def test_unimplemented_categories_are_reported():
+def test_categories_without_collected_data_are_not_available():
+    """An older add-on sends no links, attachments or text: reported, never treated as clean."""
     result = run(sender="A <a@acme.com>", auth_results=gmail_auth("acme.com"))
     statuses = {c.id: c.status for c in result.categories}
     assert statuses == {
         "authentication": "completed",
         "sender_identity": "completed",
-        "urls": "not_available",  # implemented, but this request carries no link data
-        "attachments": "not_implemented",
-        "content": "not_implemented",
+        "urls": "not_available",
+        "attachments": "not_available",
+        "content": "not_available",
+        "combined": "not_available",
     }
-    assert check_status(result, "attachments") == "not_implemented"
+    assert check_status(result, "attachments") == "not_available"
+
+
+def test_empty_collections_are_not_applicable_not_missing():
+    result = run(sender="A <a@acme.com>", auth_results=gmail_auth("acme.com"), links=[], attachments=[], body_text="")
+    statuses = {c.id: c.status for c in result.categories}
+    assert statuses["urls"] == statuses["attachments"] == "not_applicable"
+    assert statuses["content"] == "completed"
 
 
 def test_max_attainable_score_with_both_categories_allows_malicious():

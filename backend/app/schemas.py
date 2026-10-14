@@ -21,6 +21,16 @@ class Link(BaseModel):
     text: str | None = Field(default=None, max_length=200, description="Only when the text is a URL/domain")
 
 
+class Attachment(BaseModel):
+    """Attachment metadata only - the add-on never reads or sends file contents."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(max_length=255)
+    content_type: str | None = Field(default=None, max_length=200)
+    size: int | None = Field(default=None, ge=0)
+
+
 class EmailMessage(BaseModel):
     """Minimal metadata extracted by the add-on from the currently opened email."""
 
@@ -36,6 +46,12 @@ class EmailMessage(BaseModel):
     )
     links: list[Link] | None = Field(
         default=None, max_length=50, description="None = not collected (older add-on); [] = no links"
+    )
+    attachments: list[Attachment] | None = Field(
+        default=None, max_length=30, description="None = not collected; [] = no attachments"
+    )
+    body_text: str | None = Field(
+        default=None, max_length=10000, description="Truncated plain text, links removed; None = not collected"
     )
 
 

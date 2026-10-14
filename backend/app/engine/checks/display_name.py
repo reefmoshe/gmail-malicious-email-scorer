@@ -19,6 +19,18 @@ def _mentions(text_skeleton: str, phrase: str) -> bool:
     return re.search(rf"(?<!\w){re.escape(skeleton(phrase))}(?!\w)", text_skeleton) is not None
 
 
+def claimed_brands(display: str) -> list:
+    """Protected brands a display name refers to."""
+    display_skeleton = skeleton(display)
+    return [b for b in PROTECTED_BRANDS if any(_mentions(display_skeleton, n) for n in b.names)]
+
+
+def claimed_roles(display: str) -> list[str]:
+    """Organizational roles a display name claims ("IT Support", "CEO")."""
+    display_skeleton = skeleton(display)
+    return [t for t in ORGANIZATION_ROLE_TERMS if _mentions(display_skeleton, t)]
+
+
 def run(ctx: EmailContext) -> CheckOutcome:
     sender = ctx.sender
     if sender is None:
@@ -27,12 +39,11 @@ def run(ctx: EmailContext) -> CheckOutcome:
     if not sender.display:
         return outcome
 
-    display_skeleton = skeleton(sender.display)
     shown_name = for_evidence(sender.display)
     sent_from = describe_domain(sender.domain)
 
-    claimed_brands = [b for b in PROTECTED_BRANDS if any(_mentions(display_skeleton, n) for n in b.names)]
-    mismatched = [b for b in claimed_brands if sender.registered_domain not in b.owned_domains]
+    brands = claimed_brands(sender.display)
+    mismatched = [b for b in brands if sender.registered_domain not in b.owned_domains]
     if mismatched:
         outcome.detections.append(
             Detection(
@@ -55,13 +66,13 @@ def run(ctx: EmailContext) -> CheckOutcome:
         )
 
     if sender.registered_domain in FREEMAIL_DOMAINS:
-        claims = [b.name for b in claimed_brands] + [t for t in ORGANIZATION_ROLE_TERMS if _mentions(display_skeleton, t)]
+        claims = [b.name for b in brands] + claimed_roles(sender.display)
         if claims:
             outcome.detections.append(
                 Detection(
                     "SENDER_FREEMAIL_ORG_CLAIM",
                     [f'Sent from a free {sent_from} account while the name "{shown_name}" suggests: {", ".join(claims)}'],
-                    subjects=frozenset(b.name for b in claimed_brands),
+                    subjects=frozenset(b.name for b in brands),
                 )
             )
     return outcome

@@ -135,5 +135,6 @@ ORGANIZATION_ROLE_TERMS: tuple[str, ...] = (
     "support", "security", "billing", "payroll", "accounts payable", "accounting", "finance",
     "invoice", "helpdesk", "help desk", "it department", "it support", "administrator",
     "admin", "human resources", "hr department", "customer service", "service desk", "bank",
-    "תמיכה", "אבטחה", "שירות לקוחות", "הנהלת חשבונות", "משאבי אנוש", "כספים", "בנק",
+    "ceo", "cfo", "office of the ceo", "president", "board of directors",
+    "תמיכה", "אבטחה", "שירות לקוחות", "הנהלת חשבונות", "משאבי אנוש", "כספים", "בנק", 'מנכ"ל', "מנכ״ל",
 )

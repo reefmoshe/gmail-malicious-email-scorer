@@ -9,7 +9,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from email.utils import getaddresses
 
-from ..schemas import EmailMessage, Link
+from ..schemas import Attachment, EmailMessage, Link
 from .domains import normalize_domain, registered_domain
 
 # Zero-width and bidirectional-control characters can hide or reorder text in a display name.
@@ -48,6 +48,9 @@ class EmailContext:
     reply_to: list[Address] = field(default_factory=list)
     auth_results_raw: str | None = None
     links: list[Link] | None = None  # None = not collected by the add-on
+    attachments: list[Attachment] | None = None
+    subject: str = ""
+    body_text: str | None = None
 
 
 def parse_addresses(raw: str | None) -> list[Address]:
@@ -70,4 +73,7 @@ def build_context(message: EmailMessage) -> EmailContext:
         reply_to=parse_addresses(message.reply_to),
         auth_results_raw=message.auth_results,
         links=message.links,
+        attachments=message.attachments,
+        subject=message.subject,
+        body_text=message.body_text,
     )

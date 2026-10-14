@@ -43,6 +43,10 @@ CATEGORIES: dict[str, Category] = {
         Category("urls", "Links", 35),
         Category("attachments", "Attachments", 35),
         Category("content", "Message content", 15),
+        # Interactions between who sent the message and what it asks for (e.g. a payment
+        # request whose replies go to a free mailbox). Each part alone is weak; together
+        # they describe a specific fraud pattern, so the combination is its own evidence.
+        Category("combined", "Combined indicators", 20),
     )
 }
 
@@ -181,7 +185,124 @@ _URL_SIGNALS = (
     ),
 )
 
-SIGNALS: dict[str, Signal] = {s.id: s for s in _SIGNALS + _URL_SIGNALS}
+# Attachments: metadata only (name, declared type, size). Weights reflect how rarely each
+# type is sent legitimately; none overrides the score, because a file type is not proof.
+_ATTACHMENT_SIGNALS = (
+    Signal(
+        "ATT_EXECUTABLE", "attachments", 30, "high",
+        "Attachment is a program or script",
+        "The attachment runs code when opened (program, script, installer or shortcut). "
+        "Legitimate senders very rarely email these.",
+    ),
+    Signal(
+        "ATT_MACRO_DOC", "attachments", 20, "medium",
+        "Macro-enabled Office document",
+        "The attachment is an Office file type that can contain macros - small programs that "
+        "are a common way to deliver malware. Some businesses use them legitimately.",
+    ),
+    Signal(
+        "ATT_DISK_IMAGE", "attachments", 15, "medium",
+        "Disk-image attachment",
+        "Disk images (.iso, .img, .vhd) are used to smuggle programs past security warnings. "
+        "They are uncommon in normal business email.",
+    ),
+    Signal(
+        "ATT_HTML", "attachments", 15, "medium",
+        "Web page attachment",
+        "The attachment opens in a browser. Attached web pages are a common way to show a fake "
+        "login form without any link in the email.",
+    ),
+    Signal(
+        "ATT_DOUBLE_EXTENSION", "attachments", 15, "high",
+        "File name hides its real type",
+        "The file name ends with two extensions (e.g. invoice.pdf.exe) so it looks like a "
+        "document while actually being a different type of file.",
+        reinforcing_points=5,
+    ),
+    Signal(
+        "ATT_DECEPTIVE_NAME", "attachments", 10, "medium",
+        "File name uses hidden or reversing characters",
+        "The file name contains invisible or text-reversing characters, or long padding, that "
+        "change how the name appears on screen.",
+        reinforcing_points=5,
+    ),
+    Signal(
+        "ATT_ARCHIVE", "attachments", 8, "low",
+        "Compressed archive attachment",
+        "Archives (.zip, .rar) are common and usually harmless, but they can hide their contents "
+        "from security scanning.",
+    ),
+    Signal(
+        "ATT_TYPE_MISMATCH", "attachments", 5, "low",
+        "File name and declared type disagree",
+        "The file's name suggests one type of file while the email declares another.",
+        reinforcing_points=5,
+    ),
+)
+
+# Content: behaviours detected from word combinations, never single keywords. Pressure
+# tactics share one correlation group and are only reported next to a request.
+_CONTENT_SIGNALS = (
+    Signal(
+        "CONTENT_CREDENTIAL_REQUEST", "content", 10, "medium",
+        "Asks you to provide or confirm login details",
+        "The message asks you to enter, confirm or send passwords, codes or account details. "
+        "Legitimate services rarely ask for these by email.",
+    ),
+    Signal(
+        "CONTENT_FINANCIAL_REQUEST", "content", 10, "medium",
+        "Asks for a payment or a change of bank details",
+        "The message asks you to pay, transfer money, buy gift cards or use new bank details. "
+        "Changed bank details are the core of invoice and payroll fraud.",
+    ),
+    Signal(
+        "CONTENT_ACCOUNT_THREAT", "content", 5, "low",
+        "Threatens to suspend or close an account",
+        "The message warns that an account will be suspended, locked or closed - a pressure "
+        "tactic to make you act without checking.",
+        group="pressure",
+    ),
+    Signal(
+        "CONTENT_URGENCY", "content", 5, "low",
+        "Pushes you to act immediately",
+        "The message demands urgent action alongside its request. Urgency on its own is common "
+        "and is only reported together with a request.",
+        group="pressure",
+    ),
+    Signal(
+        "CONTENT_SECRECY", "content", 5, "low",
+        "Asks you to keep the request secret",
+        "The message asks for discretion or says the sender cannot be reached - typical of "
+        "fraud that tries to avoid verification.",
+        group="pressure",
+    ),
+    Signal(
+        "CONTENT_GENERIC_GREETING", "content", 3, "low",
+        "Generic greeting with a sensitive request",
+        "The message addresses you generically (e.g. 'Dear customer') while asking for sensitive "
+        "information, which suggests a mass-mailed message.",
+    ),
+)
+
+_COMBINED_SIGNALS = (
+    Signal(
+        "COMBINED_BEC_PATTERN", "combined", 20, "high",
+        "Payment request from an unverifiable identity",
+        "A request for money or new bank details comes together with an identity problem: replies "
+        "are redirected elsewhere, or a personal mailbox presents itself as a company or executive. "
+        "This is the typical pattern of business email compromise.",
+    ),
+    Signal(
+        "COMBINED_IMPERSONATION_REQUEST", "combined", 10, "medium",
+        "Sensitive request from a sender impersonating a brand",
+        "The message asks for credentials or money while the sender imitates a known brand or "
+        "organization.",
+    ),
+)
+
+SIGNALS: dict[str, Signal] = {
+    s.id: s for s in _SIGNALS + _URL_SIGNALS + _ATTACHMENT_SIGNALS + _CONTENT_SIGNALS + _COMBINED_SIGNALS
+}
 
 # Verdict thresholds on the 0-100 heuristic risk score.
 SUSPICIOUS_THRESHOLD = 30

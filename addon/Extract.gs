@@ -2,8 +2,9 @@
  * Reads ONLY the currently opened message, using the short-lived access token
  * Gmail passes in the event object (scope: gmail.addons.current.message.readonly).
  *
- * Data minimization: selected headers, plus a minimized form of each link. The message
- * body itself, link paths/queries and attachments are never sent to the backend.
+ * Data minimization: selected headers, a minimized form of each link, attachment metadata
+ * (name, type, size - never contents), and at most 8,000 characters of plain text with every
+ * web address removed. The backend analyzes the text in memory and never logs or stores it.
  */
 
 // Must match the max_length limits in backend/app/schemas.py.
@@ -15,9 +16,13 @@ var FIELD_LIMITS = {
   date: 100,
   auth_results: 5000,
   link_url: 600,
-  link_text: 200
+  link_text: 200,
+  attachment_name: 255,
+  attachment_type: 200,
+  body_text: 8000
 };
 var MAX_LINKS = 50;
+var MAX_ATTACHMENTS = 30;
 var MAX_BODY_CHARS = 300000;  // bounds the work done on very large messages
 
 function extractMessageMetadata(e) {
@@ -32,8 +37,43 @@ function extractMessageMetadata(e) {
     return_path: truncate_(message.getHeader('Return-Path'), FIELD_LIMITS.return_path),
     date: date ? date.toISOString() : null,
     auth_results: truncate_(message.getHeader('Authentication-Results'), FIELD_LIMITS.auth_results),
-    links: extractLinksSafely_(message)
+    links: extractLinksSafely_(message),
+    attachments: safely_(extractAttachments_, message),
+    body_text: safely_(extractBodyText_, message)
   };
+}
+
+/** Runs an optional extractor; on failure returns null ("not collected"), never "empty". */
+function safely_(extractor, message) {
+  try {
+    return extractor(message);
+  } catch (err) {
+    console.error('Extraction failed: ' + (err && err.name));
+    return null;
+  }
+}
+
+/** Name, declared type and size only. Contents are never read or sent. */
+function extractAttachments_(message) {
+  return message.getAttachments({ includeInlineImages: false, includeAttachments: true })
+    .slice(0, MAX_ATTACHMENTS)
+    .map(function (attachment) {
+      return {
+        filename: truncate_(attachment.getName(), FIELD_LIMITS.attachment_name) || '(unnamed)',
+        content_type: truncate_(attachment.getContentType(), FIELD_LIMITS.attachment_type),
+        size: attachment.getSize()
+      };
+    });
+}
+
+/** Plain text with all web addresses replaced, whitespace collapsed, truncated. */
+function extractBodyText_(message) {
+  var text = String(message.getPlainBody() || '').substring(0, MAX_BODY_CHARS)
+    .replace(/\bhttps?:\/\/[^\s<>"']{1,2000}/gi, '[link]')
+    .replace(/\bwww\.[^\s<>"']{1,2000}/gi, '[link]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.substring(0, FIELD_LIMITS.body_text);
 }
 
 /** null (not collected) on failure, so the backend never mistakes a failure for "no links". */
