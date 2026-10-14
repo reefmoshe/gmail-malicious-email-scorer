@@ -1,365 +1,345 @@
 # Malicious Email Scorer - a Gmail Add-on
 
-When a user opens an email in Gmail, this add-on shows a **0-100 risk score**, a **verdict**
-(Low risk / Suspicious / Likely malicious) and **the evidence behind every point**. It targets
+When a user opens an email in Gmail, this add-on shows a **risk score from 0 to 100**, a **verdict**
+(Low risk, Suspicious, or Likely malicious) and **the evidence behind every point**. It is aimed at
 phishing that reaches the inbox: look-alike sender domains, spoofed senders, deceptive links, risky
-attachments and credential or payment requests. The decision is made by a **deterministic,
-explainable rule engine** in a small Python backend - every point traces to a named signal and a
-piece of evidence. An **optional "Explain with AI" button** asks an LLM to reword the finished result
-in plain language; the LLM never sees the email text and cannot change the score or verdict.
+attachments, and requests for passwords or money.
 
-**For reviewers in a hurry** - no Gmail account or API key needed:
+The decision is made by a **rule-based engine** in a small Python backend. The same email always gets
+the same score, and every point can be traced to a named rule and a piece of evidence. An optional
+**"Explain with AI"** button asks a language model to describe the finished result in plain words. The
+model never sees the email text and cannot change the score or the verdict.
+
+<img src="docs/images/addon-card.png" alt="The add-on card in Gmail for a synthetic test email" width="420">
+
+_The add-on on a synthetic test email with an attachment named `invoice.pdf.html`: Suspicious, 30/100,
+with the AI explanation requested._
+
+**Try it in two minutes** - no Gmail account or API key needed:
 
 ```bash
-cd backend && python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate
+cd backend
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
-pytest -q                          # 344 tests, offline
-python -m demo.run_demo full       # a phishing example, scored and explained
+pytest -q                          # run the automated tests (offline)
+python -m demo.run_demo full       # score a synthetic phishing email
 ```
 
 ## Contents
 
-[Preview](#product-preview) · [Features](#key-features-and-scope) · [Architecture](#system-architecture) ·
-[Detection](#detection-engine) · [Scoring](#deterministic-risk-scoring) · [Decisions](#engineering-decisions-and-trade-offs) ·
-[Security](#security-and-privacy) · [Setup](#installation-and-setup) · [Testing](#testing-and-validation) ·
-[Limitations](#known-limitations-and-future-improvements) · [Demo](#live-demo) · [Structure](#repository-structure)
+[Features and scope](#features-and-scope) · [Architecture](#system-architecture) ·
+[Repository structure](#repository-structure) · [Detection and scoring](#detection-and-scoring) ·
+[Design decisions](#design-decisions-and-trade-offs) · [Security and privacy](#security-and-privacy) ·
+[Setup](#installation-and-setup) · [Testing](#testing-and-validation) ·
+[Limitations](#known-limitations-and-future-improvements) · [Live demo](#live-demo)
 
-## Product preview
+## Features and scope
 
-<img src="docs/images/addon-card.png" alt="The add-on card in Gmail for a synthetic test email with an invoice.pdf.html attachment" width="420">
-
-_The add-on in Gmail on a synthetic test email (attachment `invoice.pdf.html`): Suspicious, 30/100, with the
-AI explanation requested. The card is built with Google CardService and contains, in order:_
-
-1. **Security verdict · rule-based engine** - verdict, risk score, the rule that decided it, and the main findings.
-2. **Explain with AI** button (shown only when the backend has an LLM key), or an
-   **"In plain words"** summary generated from the same findings by a fixed template.
-3. **Technical findings** - each signal with its points and evidence, e.g.
-   `paypa1-secure.com resembles PayPal (paypal.com): it combines the brand name with account or security words`.
-4. **Reassuring signs** - e.g. DMARC pass, with the caveat that it proves who sent the email, not that the sender is trustworthy.
-5. **What was checked** - the status of every check; checks that could not run are listed, never treated as "safe".
-
-## Key features and scope
-
-| Capability | What it contributes |
+| Capability | What it looks for |
 |---|---|
-| **Sender authentication** | Interprets the SPF, DKIM and DMARC results Gmail recorded, trusting only Gmail-stamped results. Catches spoofing of a real domain. |
-| **Sender impersonation** | Look-alike domains of protected brands (homoglyphs, typos, brand + "secure-login"-style words), brand names in the display name, addresses hidden in the display name, Reply-To diversion. Catches attackers who own their domain and pass authentication. |
-| **Link analysis** | Link text that shows one site but leads to another, look-alike destinations, raw IP addresses (incl. disguised notations), the `user@host` trick, deceptive structure, shorteners, abused TLDs. Links are parsed, never opened. |
-| **Attachment metadata** | Executables and scripts, macro-enabled Office files, web pages and disk images, double extensions (`invoice.pdf.exe`), name vs. declared type mismatches. File contents are never read. |
-| **Content signals** | Requests for credentials or money (payment, changed bank details), with urgency or account threats as supporting context. English and Hebrew. |
-| **Explain with AI** (optional) | On request, an LLM rewords the finished result for non-technical users. Falls back to a deterministic summary. |
+| **Sender authentication** | Whether the sender's domain passed SPF, DKIM and DMARC - the checks that show an email really comes from the domain it claims. |
+| **Sender impersonation** | Domains that imitate known brands (`paypa1-secure.com`), brand names or hidden addresses in the sender's name, and replies redirected to a different domain. |
+| **Suspicious links** | Links whose visible text shows one website but lead to another, links to look-alike or raw IP addresses, and other tricks that disguise the destination. |
+| **Attachment metadata** | Programs and scripts, macro-enabled Office files, web-page attachments, and names like `invoice.pdf.exe` that hide the real file type. |
+| **Suspicious content** | Requests for passwords or money (including changed bank details), with urgency or account threats as supporting signs. English and Hebrew. |
+| **Explain with AI** (optional) | A short, plain-language explanation of the result, on request. |
 
-**Scope.** The goal is a focused product whose every decision can be explained, not a full email-security
-platform. Reputation feeds, organization-specific policies, sandboxing and ML classification were left
-out deliberately; see [Limitations](#known-limitations-and-future-improvements).
+**What it focuses on.** The project aims for **explainable, rule-based phishing detection** that a
+security reviewer can check line by line: email authentication, sender identity, suspicious links,
+attachment metadata, and basic suspicious content patterns. It does **not** open or run attachments,
+visit the websites in an email, or query external malware or reputation services. These limits are
+deliberate - they keep the system predictable, private and easy to reason about - and they are
+discussed under [Limitations](#known-limitations-and-future-improvements).
 
 ## System architecture
 
 ```mermaid
 flowchart LR
-    subgraph Google["Google - Gmail + Apps Script"]
-        U([User opens an email]) --> T[Contextual trigger<br/>Code.gs]
-        T --> X[Extract.gs<br/>reads only the open message<br/>and minimizes it]
-        C[Cards.gs<br/>CardService UI]
-    end
-    subgraph Backend["Backend - FastAPI on Render"]
-        A[security.py<br/>X-API-Key check] --> V[schemas.py<br/>Pydantic validation]
-        V --> P[Detection pipeline<br/>7 independent checks]
-        P --> S[Deterministic scoring<br/>dedup, groups, caps, verdict]
-        S --> TP[Template explanation]
-        S -.->|only POST /explain| L[LLM adapter<br/>explain/llm.py]
-    end
-    subgraph Anthropic["Anthropic API (optional)"]
-        M[Claude model]
-    end
-    X -- "HTTPS POST /analyze<br/>or /explain on button click" --> A
-    TP --> C
-    L -- "sanitized findings only" --> M
-    M -- "JSON, validated" --> L
-    L --> C
+    G["Gmail add-on<br/>(Google Apps Script)"]
+    B["Backend<br/>(Python + FastAPI on Render)"]
+    E["Rule-based detection<br/>and risk scoring"]
+    AI["Anthropic API<br/>(optional)"]
+
+    G -->|"1. minimized email data (HTTPS)"| B
+    B --> E
+    E -->|"2. score, verdict, findings"| B
+    B -->|"3. result"| G
+    B -.->|"4. only on 'Explain with AI':<br/>sanitized findings"| AI
+    AI -.->|"wording only"| B
 ```
 
-**Trust boundaries.** Email content is attacker-controlled everywhere it appears. Only the add-on can read
-Gmail; the backend receives a minimized, validated payload; the LLM receives only sanitized findings and
-its output is treated as untrusted text.
+1. When an email is opened, the **Gmail add-on** reads that one message, keeps only the parts the
+   checks need, and sends them to the backend over HTTPS.
+2. The **backend** validates the request and runs the **detection engine**, which calculates the
+   score and verdict.
+3. The add-on displays the result. Opening an email never involves an AI service.
+4. Only if the user clicks **"Explain with AI"**, the backend recalculates the same result and sends a
+   sanitized summary of the findings to **Anthropic**. The reply is used only as explanatory text; the
+   score and verdict come from the engine and cannot be changed by it.
 
-| Component | Owns | Key files |
-|---|---|---|
-| Gmail add-on (Google Apps Script) | Read the opened message with a per-message token, minimize data, call the backend, render the card | `addon/Code.gs`, `Extract.gs`, `Api.gs`, `Cards.gs`, `appsscript.json` |
-| Backend API (FastAPI) | Authentication, size limit, schema validation, logging | `backend/app/main.py`, `security.py`, `schemas.py` |
-| Detection engine | Checks, scoring and verdict - no network access | `backend/app/engine/` |
-| Explanation layer | Wording only, after scoring | `backend/app/explain/` |
+## Repository structure
 
-| Endpoint | Purpose |
+| Path | Responsibility |
 |---|---|
-| `GET /health` | Liveness and version |
-| `POST /analyze` | Called on every opened email. Deterministic result + template explanation; **never calls the LLM**. Returns `ai_explanation_available`. |
-| `POST /explain` | Called only by the "Explain with AI" button. Accepts the same message (never a score or verdict), **re-runs the engine**, then adds the AI explanation. |
+| `addon/` | The Gmail add-on: reads the opened email, calls the backend, draws the card (Google Apps Script) |
+| `backend/app/main.py`, `security.py`, `schemas.py` | The API: endpoints, API key check, request validation |
+| `backend/app/engine/` | Detection and scoring: one file per check in `checks/`, all weights in `signals.py`, scoring rules in `scoring.py` |
+| `backend/app/explain/` | Plain-language explanations: a fixed template, the optional AI explanation, and its system prompt |
+| `backend/demo/` | Offline examples on synthetic emails |
+| `backend/tests/` | Automated tests |
+| `docs/` | Detailed signal reference and the screenshot |
 
-## Detection engine
+## Detection and scoring
 
-The engine parses the request once into a normalized context, runs seven independent checks, and
-scores their findings. A failing check is reported as `failed` and the others still run. Full signal
-reference: [docs/detection-design.md](docs/detection-design.md).
+### What the checks do
 
-- **Sender authentication** (`checks/authentication.py`). Anyone can write an `Authentication-Results`
-  header, so results are used only when stamped by Gmail (`authserv-id = mx.google.com`) and matching the
-  From domain. When DMARC was evaluated, its result decides and SPF/DKIM failures are counted as part of
-  it; forwarded mail that fails SPF but passes DMARC is not penalized.
-- **Sender impersonation** (`checks/lookalike.py`, `display_name.py`, `reply_to.py`, `domains.py`).
-  Look-alike detection is binary: a supported technique matches with sufficient evidence, or nothing is
-  reported. Safeguards: official and RDAP-verified brand-owned domains (`google-analytics.com`), a
-  separate list of unrelated look-alikes (`paypay.ne.jp`, `unwind.com`), whole-label matching
-  (`applebees.com` is not Apple), realistic-typo rules (adjacent keys, missing/extra/swapped letter),
-  registered domains from the offline Public Suffix List, and punycode shown in evidence.
-- **Links** (`checks/links.py`, `urls.py`). The add-on sends only `scheme://[user@]host[:port]` and the
-  visible text when that text is itself an address. Click-tracking and security link-rewriting services
-  are excluded from text/destination mismatches.
-- **Attachments** (`checks/attachments.py`). Name, declared MIME type and size only. Extensions are read
-  as Windows would (hidden right-to-left characters and trailing dots removed).
-- **Content** (`content.py`). Per sentence: a credential word plus an action verb, or a payment word plus
-  an action verb, or bank details plus a change word. Urgency and threats count only next to such a
-  request; single keywords never count.
+- **Sender authentication** (`checks/authentication.py`). Gmail records whether an email passed SPF,
+  DKIM and DMARC. Because anyone can add a fake version of that record to an email, only results
+  written by Gmail itself are trusted. Forwarded mail that fails SPF but passes DMARC is not penalized.
+- **Sender impersonation** (`checks/lookalike.py`, `display_name.py`, `reply_to.py`). Look-alike
+  domains are found through swapped characters (`paypa1`), realistic typos, other domain endings, the
+  brand combined with words like "secure" or "login", and the brand used as a subdomain. To avoid false
+  alarms, domains really owned by a brand (`google-analytics.com`) and unrelated companies with similar
+  names (`paypay.ne.jp`) are excluded, and only whole words are compared (`applebees.com` is not Apple).
+- **Links** (`checks/links.py`). Links are read as text and never opened. Click-tracking services used
+  by newsletters are not counted as deceptive.
+- **Attachments** (`checks/attachments.py`). Only the file name, declared type and size are used. The
+  real extension is read the way Windows reads it, so hidden characters cannot disguise `.exe` as `.pdf`.
+- **Content** (`content.py`). A finding needs a combination within one sentence - for example a word
+  like "password" together with an action like "verify". Single words never count.
 
-**Not implemented**: attachment content inspection, malware scanning, URL fetching, reputation lookups,
-ML classification.
+The complete list of signals and rules is in [docs/detection-design.md](docs/detection-design.md).
 
-## Deterministic risk scoring
+### How the score is calculated
 
-Weights live in one file, `backend/app/engine/signals.py`; checks report evidence, never points.
-`backend/app/engine/scoring.py` applies five rules:
+All weights are defined in one place, `backend/app/engine/signals.py`; the rules that combine them are in
+`backend/app/engine/scoring.py`. The goal of the rules is that **the same evidence is never counted twice**,
+so overlapping findings cannot inflate the score.
 
-1. **Deduplication** - a signal counts once however many links or files trigger it; their evidence is merged.
-2. **Correlation groups** - signals describing one behaviour count once (e.g. a DMARC failure and the SPF failure that caused it; a look-alike Reply-To and a plain Reply-To mismatch).
-3. **Reinforcement** - a weaker finding about the *same* brand or file as a stronger one in the same category adds only 5 points.
-4. **Category caps** - authentication 30, sender identity 45, links 35, attachments 35, content 15.
-5. **Sum, bounded to 100.** Positive evidence (DMARC pass) is shown but never subtracted.
+1. **Deduplication** - if the same suspicious signal appears several times (for example in ten links), it counts once.
+2. **Correlation** - if two findings describe the same behaviour, only the stronger one counts. Example: a
+   DMARC failure already includes the SPF failure that caused it.
+3. **Reinforcement** - a weaker finding that supports a stronger finding about the *same brand or file*
+   adds only 5 points instead of its full weight.
+4. **Category caps** - each kind of evidence has a maximum, so no single category can dominate.
+5. **Final score** - the category totals are added and capped at 100. Positive findings, such as a
+   passed DMARC check, are shown but do not subtract points, because attackers can also authenticate
+   their own look-alike domains.
 
-| Category (cap) | Signals and points |
+| Category (maximum) | Signals and points |
 |---|---|
-| Authentication (30) | DMARC fail 25 · SPF fail 10 · SPF softfail 5 · DKIM fail 8 · no DKIM signature 3 |
-| Sender identity (45) | Look-alike sender domain 35 · look-alike Reply-To 20 · free mailbox claiming an organization 12 · brand in display name 10 · address in display name 10 · Reply-To mismatch 6 |
-| Links (35) | Text vs. destination mismatch 25 · look-alike destination 15 · IP host 15 · `@` trick 15 · deceptive structure 8 · abused TLD 5 · shortener 5 · plain http 3 |
-| Attachments (35) | Executable/script 30 · macro document 20 · web page/disk image 15 · double extension 15 · type mismatch 5 |
-| Content (15) | Credential request 10 · money request 10 · pressure 5 |
+| Sender authentication (30) | DMARC fail 25 · SPF fail 10 · SPF softfail 5 · DKIM fail 8 · no DKIM signature 3 |
+| Sender identity (45) | Look-alike sender domain 35 · look-alike Reply-To 20 · free mailbox presenting itself as an organization 12 · brand in sender name 10 · different address in sender name 10 · replies go to another domain 6 |
+| Links (35) | Text shows one site, link opens another 25 · look-alike destination 15 · raw IP address 15 · `@` trick 15 · deceptive structure 8 · frequently abused domain ending 5 · URL shortener 5 · unencrypted http 3 |
+| Attachments (35) | Program or script 30 · macro document 20 · web page or disk image 15 · double extension 15 · name and type disagree 5 |
+| Content (15) | Password or login request 10 · payment or bank-details request 10 · urgency or threat 5 |
 
-**Verdict**: 0-29 **Low risk** (worded "no strong warning signs", never "safe"), 30-69 **Suspicious**,
-70-100 **Likely malicious**. A single counted high-severity finding (e.g. a look-alike domain) raises Low
-risk to Suspicious - never higher. No category cap reaches 70, so **Likely malicious requires evidence
-from more than one category**. If no check could run, the verdict is **Inconclusive** with no score.
-**Missing data never adds points** and is never reported as safe; the response lists what could not be
-checked and the maximum score the completed checks could have produced.
+**Verdict.** 0-29 is **Low risk** (worded "no strong warning signs", never "safe"), 30-69 is
+**Suspicious**, and 70-100 is **Likely malicious**. One strong finding - such as a look-alike domain -
+is always at least Suspicious, but never Likely malicious on its own: no category can exceed 45 points,
+so reaching 70 requires evidence of more than one kind. If no check could run, the verdict is
+**Inconclusive**. Missing information never adds points, and the card lists any check that could not run.
 
-### Worked example
+**Example** (checked by `test_independent_evidence_across_categories_reaches_malicious` in
+`backend/tests/test_check_links.py`). A synthetic email from `"PayPal Service" <service@paypa1-secure.com>`
+that passes DMARC and contains a link showing `https://www.paypal.com` but opening `https://paypal-verify-login.com`:
 
-Reproduce with `python -m demo.run_demo full`. Synthetic input: sender `"PayPal Service" <service@paypa1-secure.com>`
-(authenticated - DMARC pass), a link displayed as `https://www.paypal.com` pointing to
-`https://paypal-verify-login.com`, an attachment `PayPal_Form.html`, and the text "Your account will be
-suspended within 24 hours. Please verify your password."
-
-| Category | Finding | Points | Why |
-|---|---|---|---|
-| Authentication | DMARC pass | 0 | Shown as a reassuring sign; not subtracted |
-| Sender identity | Look-alike sender domain | 35 | `paypa1` + `secure` |
-| | Brand in display name | **5** of 10 | Reinforces the look-alike (same brand) |
-| Links | Text vs. destination mismatch | 25 | Shows paypal.com, opens another site |
-| | Look-alike destination | **5** of 15 | Reinforces the mismatch (same brand) |
-| Attachments | Web page attachment | 15 | `.html` |
-| Content | Credential request | 10 | "verify your password" |
-| | Pressure | 5 | "suspended within 24 hours", next to a request |
-| **Total** | | **100** | 40 + 30 + 15 + 15 = 100 -> **Likely malicious** |
-
-The raw weights of these findings add up to 115 (35 + 10 + 25 + 15 + 15 + 10 + 5). Reinforcement removes
-15 points that would count the same PayPal impersonation twice, leaving 100; no category cap is reached here.
-
-**Why deterministic.** The same email always gets the same score, every point is traceable and
-unit-testable, and attacker-written text cannot argue with a rule the way it can with an LLM prompt.
-**The weights are engineering heuristics** - chosen by how specific a signal is to malicious mail, how
-common it is in legitimate mail, whether it is independent of other findings, and its impact. **They
-are not statistically calibrated**: no labelled dataset was used. The score is a risk score, not a probability.
-
-## Engineering decisions and trade-offs
-
-The rationale column describes the engineering reasoning for each choice.
-
-| Decision | Rationale | Trade-off / limitation |
+| Finding | Points | Reason |
 |---|---|---|
-| Google Apps Script Workspace add-on | Native Gmail integration; Google-managed OAuth with a per-message token, so only the opened email is readable | 30 s limit per action, limited UI (CardService), JavaScript without a test framework in this repo |
-| Backend instead of logic in the add-on | Detection in Python is unit-testable (344 tests) and has one source of truth | Minimized email data leaves Google; one more service to run |
-| FastAPI + Pydantic | Typed contract with length limits and unknown-field rejection in little code | Python hosting needed (Render free tier sleeps when idle) |
-| Deterministic scoring | Reproducible, explainable, resistant to manipulation by email text | Heuristic weights; fixed rules miss novel patterns |
-| Correlation groups, reinforcement, category caps | One behaviour is not counted twice; no single category dominates | More rules to explain; a strong single signal stays at Suspicious |
-| Metadata-only attachments | No need to download or execute untrusted files; no contents leave Gmail | A malicious file with an ordinary name is not detected |
-| Rule-based content analysis (EN/HE) | Transparent, testable, no model | Paraphrasing evades it; legitimate security notices produce minor findings |
-| Host-only links | Password-reset tokens and tracking IDs never leave Gmail | Paths and redirect parameters are not inspected |
-| AI explanation on demand | No paid call or data transfer on email open; user-initiated | One extra click; first click after a restart can be slower |
-| Template fallback | The result is always complete without an LLM | Less natural wording |
+| Sender domain imitates PayPal | 35 | `paypa1` looks like `paypal`, combined with `secure` |
+| "PayPal" in the sender's name | 5 (of 10) | Supports the finding above about the same brand |
+| Link text shows a different site | 25 | Shows paypal.com, opens another domain |
+| Link destination imitates PayPal | 5 (of 15) | Supports the finding above about the same brand |
+| DMARC pass | 0 | Shown as a reassuring sign, not subtracted |
+| **Total** | **70** | Sender identity 40 + links 30 -> **Likely malicious** |
+
+Without reinforcement, the same evidence would add up to 85 by counting the PayPal impersonation twice.
+
+**What the score means.** The weights are **engineering judgments**, based on how strong each signal is,
+how often it appears in legitimate email, and whether it overlaps with other signals. They have **not
+been statistically calibrated** on labelled real-world email. A score of 85/100 is a level of concern,
+**not an 85% probability** that the email is malicious.
+
+## Design decisions and trade-offs
+
+| Decision | Rationale | Trade-off |
+|---|---|---|
+| Google Apps Script add-on | The supported way to extend Gmail; Google handles sign-in and grants access to the opened email only | Limited UI, 30-second limit per action, no automated tests for the add-on code in this repository |
+| Separate Python backend | Detection logic is easy to test in Python and lives in one place | Limited email data leaves Google; one more service to run and secure |
+| FastAPI | Request validation and a typed API with little code | Needs Python hosting; the free hosting plan sleeps when idle |
+| Rule-based scoring instead of a model-based classifier | Reproducible, explainable, testable, and the email's own text cannot talk the engine into a different score | Fixed rules miss new attack patterns; weights are not learned from data |
+| Correlation, reinforcement and caps | Overlapping evidence is not counted twice | More rules to explain; a single strong signal stays at Suspicious |
+| Attachment metadata only | No need to download or run untrusted files | A malicious file with an ordinary name is not detected |
+| Simple content rules (English and Hebrew) | Transparent and testable | Rephrasing avoids them; genuine security notices produce small findings |
+| Links reduced to their domain | Password-reset tokens and tracking IDs in links are not sent | Paths and redirect parameters are not inspected |
+| AI explanation only on request | No cost and no data sent to Anthropic when an email is opened | One extra click; the first click after a restart can be slow |
+| Fixed-template fallback | A complete result is always shown, even without the AI service | Less natural wording |
 
 ## Security and privacy
 
-- **Least privilege.** Scopes: `gmail.addons.execute`, `gmail.addons.current.message.readonly` (only the
-  opened message, via a short-lived token from the trigger event), `script.external_request`. No access
-  to the rest of the mailbox. `urlFetchWhitelist` restricts outbound calls to the backend.
-- **Data minimization in the add-on.** Selected headers; links reduced to `scheme://[user@]host[:port]`
-  (path, query, fragment and any password removed); link text only when it is an address; attachment name/type/size; at most 8,000 characters of
-  text with every web address replaced by `[link]`. A failed extraction is sent as "not collected", not as empty.
-- **Backend authentication.** Shared secret in `X-API-Key`, compared in constant time; requests are
-  rejected if the server has no key configured (fails closed).
-- **Input validation.** Pydantic models with per-field length limits and `extra="forbid"`; 64 KB body
-  limit (enforced on the `Content-Length` header); parsers that never raise on malformed headers;
-  bounded regular expressions, tested with hostile input.
-- **Rendering.** Every email-derived string is HTML-escaped before display, because card text supports HTML.
-- **Secrets.** The backend key lives in Render environment variables and Apps Script Script Properties;
-  the Anthropic key only in Render. `.env` and `.clasp.json` are git-ignored.
-- **Logging.** Verdict, score, signal IDs, check counts, timing and LLM token counts - no email content,
-  addresses, evidence or keys (asserted in tests).
-- **LLM.** Called only from `POST /explain`. It receives the verdict, score, finding titles and short
-  meanings, plus redacted evidence (domains, file names; mailbox and display names removed) in a separate
-  `untrusted_evidence` field. **Never sent**: message text, raw headers, attachment contents, full URLs.
-  The [system prompt](backend/app/explain/system_prompt.md) tells the model to restate the verdict and
-  score, use only given findings, avoid certainty claims and treat `untrusted_evidence` as data. Output
-  must match a JSON schema and is rejected - falling back to the template - if it restates a different
-  score, claims certainty ("definitely safe"), is truncated, refused or invalid. No tools; the explanation
-  runs on a copy of the result, so it cannot modify it.
+- **Minimal Gmail access.** The add-on can read only the email the user has open, through a short-lived
+  token from Gmail, and can contact only the configured backend. It cannot read the rest of the mailbox.
+- **Data minimization.** The add-on sends the backend only what the checks need: selected headers, the
+  domain of each link (not its path or parameters), attachment names and types (never the files), and
+  up to 8,000 characters of text with web addresses removed. This is still email-derived data leaving
+  Gmail, so it is kept as small as possible.
+- **Backend authentication and validation.** Every request must carry a shared API key, and requests
+  with unexpected fields or oversized values are rejected. The key authenticates the add-on, **not each
+  Gmail user**: anyone who obtained the key could call the API.
+- **Secrets.** API keys are stored in the hosting provider's environment settings and in Apps Script's
+  private project settings - never in the code or the repository.
+- **AI privacy.** The optional AI call receives a separate, sanitized summary of the findings - no email
+  text, headers, attachments, sender names, mailbox names or full links (domains and file names remain). Email-derived evidence is marked as
+  untrusted data, so instructions hidden in an email are not followed as commands. Replies that change
+  the score, claim certainty or are incomplete are discarded.
+- **Safe failures.** If a check, the backend or the AI service fails, the user still sees a result or a
+  clear message, and nothing is ever marked safe because it could not be checked. Logs contain scores,
+  rule names, timings and AI token counts - no email content, addresses or keys.
 
-**Known gaps** (this is not a production-ready service): a single static shared key with no rotation or
-rate limiting; any holder of the key can call the API; free-tier hosting with cold starts; the in-memory
-LLM cache is per process; the add-on is a test deployment, not Marketplace-verified.
+This is a working prototype, **not a production-ready service**. Known gaps: one shared key with no
+rotation or rate limiting, free hosting that sleeps when idle, and a test installation of the add-on
+that has not gone through Google's verification.
 
 ## Installation and setup
 
-**Prerequisites**: Python (developed and tested with 3.14, see `backend/.python-version`), Node.js
-(for `clasp`), a Google account, and a host for the backend (Render was used).
+**Prerequisites:** Python 3.14 (the version used for development and testing, see `backend/.python-version`),
+Node.js (to install Google's `clasp` tool), and a Google account.
 
-### 1. Backend - local
+### Run the backend locally
 
 ```bash
 cd backend
 python -m venv .venv
-. .venv/bin/activate                    # Windows: .venv\Scripts\activate
-pip install -r requirements-dev.txt
-export API_KEY="<long-random-value>"    # PowerShell: $env:API_KEY = "<long-random-value>"
+source .venv/bin/activate                # Windows: .venv\Scripts\activate
+pip install -r requirements-dev.txt      # application + test dependencies
+export API_KEY="<long-random-value>"     # Windows PowerShell: $env:API_KEY = "<long-random-value>"
 uvicorn app.main:app --port 8000
-curl http://localhost:8000/health
 ```
 
-### 2. Backend - Render
+Check that it runs: open `http://localhost:8000/health`, which returns `{"status": "ok", ...}`.
 
-Create a Web Service from the repository: root directory `backend`, build command
-`pip install -r requirements.txt`, start command `uvicorn app.main:app --host 0.0.0.0 --port $PORT`,
-health check path `/health`.
+### Deploy the backend to Render
 
-| Environment variable | Required | Purpose |
+Create a **Web Service** from this repository with these settings:
+
+| Setting | Value |
+|---|---|
+| Root directory | `backend` |
+| Build command | `pip install -r requirements.txt` |
+| Start command | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+| Health check path | `/health` |
+
+| Environment variable | Required? | Purpose |
 |---|---|---|
-| `API_KEY` | yes | Shared secret expected in `X-API-Key` |
-| `ANTHROPIC_API_KEY` | no | Enables "Explain with AI". When clicked, sanitized findings are sent to Anthropic |
-| `LLM_MODEL` | no | Model override (default `claude-haiku-5-5`) |
-| `LLM_MAX_TOKENS` | no | Output token limit (default 400; valid 100-4000) |
-| `LLM_TIMEOUT_SECONDS` | no | LLM request timeout (default 12) |
+| `API_KEY` | **Required** | Shared secret the add-on sends with every request |
+| `ANTHROPIC_API_KEY` | Optional | Enables the "Explain with AI" button |
+| `LLM_MODEL` | Optional | AI model (default `claude-haiku-5-5`) |
+| `LLM_MAX_TOKENS` | Optional | Maximum length of the AI reply in tokens (default 400) |
+| `LLM_TIMEOUT_SECONDS` | Optional | AI request timeout (default 12) |
 
-### 3. Gmail add-on
+### Install the Gmail add-on
+
+First enable the Apps Script API at https://script.google.com/home/usersettings, then:
 
 ```bash
 npm install -g @google/clasp
 clasp login
 cd addon
 clasp create --type standalone --title "Malicious Email Scorer" --rootDir .
-git checkout appsscript.json            # clasp create overwrites the manifest
+git checkout appsscript.json             # "clasp create" overwrites the manifest; restore ours
 clasp push --force
 ```
 
-Enable the Apps Script API first at https://script.google.com/home/usersettings. Then:
+1. In `addon/appsscript.json`, set `urlFetchWhitelist` to your backend address
+   (`https://<your-backend-host>/`) and run `clasp push --force` again.
+2. In the Apps Script editor, open **Project Settings -> Script properties** and add `BACKEND_URL`
+   (`https://<your-backend-host>`) and `API_KEY` (the same value as on the backend).
+3. Choose **Deploy -> Test deployments -> Install**.
+4. Open Gmail, open an email, and click the add-on icon in the side panel (it appears on the left when
+   Gmail is set to a right-to-left language). Approve the requested permissions - Google shows an
+   "unverified app" warning for test installations.
 
-1. In `addon/appsscript.json`, set `urlFetchWhitelist` to `https://<your-backend-host>/` and push again.
-2. Apps Script editor -> **Project Settings** -> **Script properties**: add `BACKEND_URL`
-   (e.g. `https://<your-backend-host>`) and `API_KEY` (the same value as the backend).
-3. **Deploy -> Test deployments -> Install**.
-4. Open Gmail, open any email and click the add-on icon in the side panel (on the left in right-to-left
-   Gmail languages). Authorize the three scopes listed above; Google shows an "unverified app" warning
-   for test deployments.
+**Check that it works:** the card shows a verdict and a "What was checked" section. If it shows
+"Analysis unavailable", the backend address or key is wrong, or the free backend is still waking up -
+click "Analyze again".
 
-**Verify**: the card shows a verdict and "What was checked". "Analysis unavailable" means the backend URL
-or key is wrong, or the free backend is waking up - use "Analyze again".
-
-**Deployment order**: deploy the backend before pushing a new add-on version - the API rejects unknown
-fields, so a newer add-on needs a backend that knows them.
+When updating both parts, **deploy the backend first** - it rejects fields it does not know, so a newer
+add-on needs the matching backend.
 
 ## Testing and validation
 
-`pytest` - 344 tests, all passing at the time of writing, with no network access (`cd backend && pytest -q`).
+```bash
+cd backend
+pytest -q                 # 344 tests, all passing at the time of writing; no network access
+```
 
-| Area | Files | What is covered |
-|---|---|---|
-| Parsers and domains | `test_auth_results_parser`, `test_urls`, `test_domains` | Header parsing, IP notations, registered domains, look-alikes and false-positive safeguards |
-| Checks | `test_check_*` | Legitimate mail, attacks, malformed and missing input, English and Hebrew |
-| Scoring | `test_scoring`, `test_pipeline` | Dedup, groups, reinforcement, caps, thresholds, failed checks, coverage |
-| API and scenarios | `test_api`, `test_scenarios`, `test_demo` | Authentication, limits, the response contract, end-to-end examples |
-| Explanation layer | `test_explanation`, `test_explain_endpoint` | `/analyze` never calls the LLM; `/explain` calls it once; cache and concurrent clicks; the LLM cannot change score, verdict or findings; truncated, refused and invalid answers fall back; prompt-injection attempts; no secrets in logs; token limit configuration |
+- **Automated tests** cover each check (legitimate and malicious examples, malformed and missing data,
+  Hebrew and international domains), the scoring rules (deduplication, correlation, reinforcement, caps,
+  exact verdict thresholds), the API (authentication, size limits, unexpected fields) and end-to-end
+  scenarios.
+- **AI explanation tests use a simulated Anthropic service.** They check that opening an email never
+  calls the AI, that the button calls it once even when clicked repeatedly, that the AI cannot change the
+  score, verdict or findings, and that timeouts, refusals, cut-off or malformed replies fall back to the
+  fixed template.
+- **Manual tests in Gmail:** the add-on was tested in a real Gmail account against the deployed backend,
+  including "Explain with AI" on synthetic emails (see the screenshot), and one live call to Anthropic
+  with a synthetic email.
+- **Not covered by automated tests:** the add-on's Apps Script code (reading the email, removing link
+  details, drawing the card), which was checked manually and with a local test harness that is not part
+  of this repository.
 
-**Mocked**: the Anthropic API (a fake provider and a fake SDK client). **Verified manually**: the add-on in
-a real Gmail account against the deployed backend, including "Explain with AI" on a synthetic email (see the
-screenshot above), and one live Anthropic call with a synthetic email (301 of 400 output tokens used; score
-and verdict unchanged). **Not automated**: the Apps Script code
-(it was exercised with a local harness during development, which is not part of this repository).
+**What the tests do and do not show.** Passing tests show that the software behaves as designed. They do
+**not** measure how many real phishing emails it would catch or how many legitimate emails it would flag
+- that would require evaluation on real, labelled email.
 
 ## Known limitations and future improvements
 
-- **False negatives.** Business email compromise without a link or attachment (a payment request with
-  replies diverted to a free mailbox) scores about 21 - Low risk - because each part is common in
-  legitimate mail. Brands outside the built-in list get no look-alike protection. A malicious page on a
-  clean-looking domain is not recognized (no reputation data).
-- **False positives.** Brands mailing through third-party services get a minor display-name finding;
-  legitimate "reset your password" notices get minor content findings (both stay Low risk by design).
-- **Evidence limits.** Authentication proves which domain sent an email, not intent. Attachment metadata
-  says nothing about content. Phrase rules can be paraphrased around.
-- **Platform.** One `Authentication-Results` header is read; links inside malformed HTML can be missed;
-  the free backend sleeps and the add-on has a 30 s action limit.
+**Limitations**
 
-**What I would do next, in order:**
+- **Missed attacks (false negatives).** A payment-fraud email with no link or attachment scores about 21
+  (Low risk), because each of its signs is also common in legitimate mail. Brands outside the built-in
+  list are not protected against look-alikes. A malicious website on an ordinary-looking domain is not
+  recognized.
+- **False alarms (false positives).** Brands that send through third-party mailing services get a small
+  sender-name finding, and genuine "reset your password" emails get small content findings. Both stay
+  Low risk by design.
+- **Limits of the evidence.** Authentication shows which domain sent an email, not whether it is honest.
+  File names say nothing about file contents. Content rules can be avoided by rephrasing.
+- **Platform.** The free backend sleeps after inactivity, and an add-on action must finish within 30 seconds.
 
-1. **Calibrate weights on labelled data** - measure precision and recall per signal; today's weights are reasoned, not measured.
-2. **Business email compromise rule** - combine a payment request with an identity anomaly; this is the largest known gap.
-3. **Privacy-preserving URL reputation** - e.g. Safe Browsing's hash-prefix API, so destinations are checked without disclosing them.
-4. **Operational hardening** - per-user authentication or key rotation, rate limiting, an always-on instance.
+**What I would improve next, in order**
+
+1. **Calibrate the weights with labelled data.**
+   *Why:* today's weights are reasoned engineering choices, not measured ones. Measuring **precision**
+   (how many flagged emails are really malicious) and **recall** (how many malicious emails get flagged)
+   per signal would show which weights to change.
+   *Example:* if many legitimate emails were flagged because of a different Reply-To address, the data
+   would justify lowering that signal's weight.
+2. **Detect business email compromise (BEC) better.**
+   *Why:* payment-fraud emails often contain no link or attachment, so today they score low.
+   *Example:* an email that claims to come from a finance manager and asks for a bank transfer to a new
+   account, with replies going to a personal mailbox.
+3. **Check links against a reputation service.**
+   *Why:* a link can look completely normal and still lead to a known phishing site.
+   *Example:* a phishing page hosted on an ordinary-looking domain could be recognized through an external
+   threat database. The privacy impact of sending link information to that service would need to be
+   designed carefully.
+4. **Make it production-ready.**
+   *Why:* a real deployment needs stronger reliability and access control.
+   *Example:* rate limiting would stop excessive requests, per-user authentication would replace the
+   shared key, and an always-on backend would avoid the delay after inactivity.
 
 ## Live demo
 
-Uses your own Gmail account and synthetic emails sent to yourself; never click the links.
+Use your own Gmail account and synthetic emails sent to yourself. Do not click the links.
 
-1. **Low risk.** Open an ordinary notification already in the inbox. Expected: Low risk, a "DMARC pass" reassuring sign.
-2. **Phishing simulation.** Send yourself an email with three lines:
-   `https://www.paypal.com` (select it, press Ctrl+K, link it to `https://example.com`), `http://192.0.2.1`, and
-   "Your account will be suspended within 24 hours. Please verify your password." Open it from Sent.
-   Expected: **Suspicious, 50** - link mismatch 25, IP host 10 (capped), credential request 10, pressure 5.
-3. **Explain with AI.** Click the button. Expected: an "AI explanation" section appears; the score and verdict are unchanged.
-4. **Attachment (optional).** Attach a text file named `invoice.pdf.html`. Expected: **Suspicious, 30** - web page 15 + double extension 15.
-
-`example.com` and `192.0.2.1` are reserved for documentation. For an offline demo: `python -m demo.run_demo`.
-
-## Repository structure
-
-```
-addon/                     Gmail add-on (Google Apps Script)
-  appsscript.json          Manifest: trigger, OAuth scopes, allowed backend URL
-  Code.gs                  Entry points: open trigger, "Analyze again", "Explain with AI"
-  Extract.gs               Reads the opened message and minimizes it
-  Api.gs                   Calls /analyze and /explain
-  Cards.gs                 Card UI, HTML-escaping
-backend/
-  app/main.py              Endpoints, body-size limit, logging
-  app/security.py          API key check
-  app/schemas.py           Request/response contract
-  app/engine/              Detection engine: signals.py (weights), scoring.py, checks/, domains.py, content.py
-  app/explain/             Template and LLM explanation, system_prompt.md
-  demo/run_demo.py         Offline scenarios
-  tests/                   344 tests
-docs/
-  detection-design.md      Full signal and rule reference
-  interview-preparation.md Design study guide (Hebrew)
-```
-
-## Further documentation
-
-- [docs/detection-design.md](docs/detection-design.md) - every signal, weight, correlation group and safeguard.
-- [docs/interview-preparation.md](docs/interview-preparation.md) - design rationale and trade-offs (Hebrew).
+1. **Low-risk email.** Open an ordinary notification already in your inbox. *Expected:* Low risk, with
+   "Sender domain verified (DMARC pass)" under reassuring signs.
+2. **Suspicious email.** Send yourself an email containing three lines: `https://www.paypal.com`
+   (select it, press Ctrl+K, and link it to `https://example.com`), `http://192.0.2.1`, and
+   "Your account will be suspended within 24 hours. Please verify your password." Open it from your Sent folder.
+3. **Score and findings.** *Expected:* Suspicious, 50/100 - deceptive link 25, raw IP address 10 (the
+   links category is capped at 35), password request 10, urgency 5. The technical findings show the evidence.
+4. **Explain with AI.** Click the button. *Expected:* an "AI explanation" section appears below the result.
+5. **The decision does not change.** The score and verdict above the explanation stay exactly the same.
