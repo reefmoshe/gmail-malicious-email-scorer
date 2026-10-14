@@ -7,7 +7,17 @@
  * so the UI can show a friendly error card.
  */
 
+/** Deterministic analysis - runs on every opened email, never calls an LLM. */
 function analyzeWithBackend(metadata) {
+  return postToBackend_('/analyze', metadata);
+}
+
+/** Same analysis plus an AI explanation - only when the user clicks "Explain with AI". */
+function explainWithBackend(metadata) {
+  return postToBackend_('/explain', metadata);
+}
+
+function postToBackend_(path, metadata) {
   var props = PropertiesService.getScriptProperties();
   var baseUrl = props.getProperty('BACKEND_URL');
   var apiKey = props.getProperty('API_KEY');
@@ -18,7 +28,7 @@ function analyzeWithBackend(metadata) {
 
   var response;
   try {
-    response = UrlFetchApp.fetch(baseUrl.replace(/\/+$/, '') + '/analyze', {
+    response = UrlFetchApp.fetch(baseUrl.replace(/\/+$/, '') + path, {
       method: 'post',
       contentType: 'application/json',
       headers: { 'X-API-Key': apiKey },

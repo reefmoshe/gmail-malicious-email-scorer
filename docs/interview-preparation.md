@@ -36,7 +36,7 @@ A guide to defending the implementation. Every statement refers to the actual co
 1. Gmail opens a message -> `onGmailMessageOpen(e)` with `e.gmail.messageId` and a short-lived `accessToken`.
 2. `GmailApp.setCurrentMessageAccessToken` -> read only that message (scope `gmail.addons.current.message.readonly`).
 3. `extractMessageMetadata` builds the payload: subject, From, Reply-To, Return-Path, date, `Authentication-Results`; links as `scheme://[user@]host` + text only if the text is an address; attachments as name/type/size; up to 8,000 chars of text with URLs replaced by `[link]`. Failed extractions are sent as `null` ("not collected"), never as empty.
-4. `POST /analyze` over HTTPS with `X-API-Key`.
+4. `POST /analyze` over HTTPS with `X-API-Key` - deterministic only, no LLM. If a key is configured the card offers "Explain with AI"; clicking it calls `POST /explain`, which re-runs the engine on the same message and only then asks the LLM (model `claude-haiku-5-5`, `LLM_MAX_TOKENS` default 400, cached per result).
 5. Backend: size check -> API key -> Pydantic validation -> `analyze()` -> `explain()` -> JSON.
 6. Card: verdict section (engine), explanation section (labelled), technical findings, reassuring signs, what was checked.
 
@@ -74,7 +74,7 @@ sender 35 + 5 (reinforcing) = 40; links 25 + 5 (reinforcing) = 30; attachment 15
 | Every point traceable to evidence | Heuristic weights, not calibrated |
 | Low false-positive design (correlation, caps, safeguards) | Misses attacks that look ordinary (BEC without link/attachment) |
 | Least-privilege Gmail access, minimized data | Paths/parameters of links not analyzed |
-| 321 tests, deterministic results | Brand list and phrase lists need maintenance |
+| 341 tests, deterministic results | Brand list and phrase lists need maintenance |
 | Works with no external service | Free hosting sleeps when idle |
 
 ## 8. Trade-offs to be ready to discuss

@@ -132,3 +132,6 @@ class AnalyzeResponse(BaseModel):
     explanation: Explanation | None = Field(
         default=None, description="Added after scoring; wording only, never changes the fields above"
     )
+    ai_explanation_available: bool = Field(
+        default=False, description="True when /explain can produce an AI explanation (key configured)"
+    )

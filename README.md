@@ -18,7 +18,8 @@ an optional LLM only rewords the engine's result for non-technical users and can
 When you open an email, the add-on's side panel shows:
 
 1. **Security verdict (rule-based engine)** - verdict, risk score and the rule that decided it.
-2. **In plain words / AI explanation** - what the result means and what to do. Clearly labelled,
+2. **Explain with AI** button (or the rule-based "In plain words" summary) - what the result means
+   and what to do, on demand. Clearly labelled,
    never a second verdict.
 3. **Technical findings** - every signal that contributed, its points and its evidence
    (e.g. `paypa1-secure.com resembles PayPal (paypal.com)`).
@@ -35,7 +36,7 @@ flowchart LR
     A -->|reads ONLY the open message<br/>gmail.addons.current.message.readonly| A
     A -->|HTTPS POST /analyze<br/>X-API-Key, minimized JSON| B[FastAPI backend on Render]
     B --> E[Deterministic engine<br/>checks -> scoring -> verdict]
-    E --> X[Explanation layer<br/>template, or LLM if configured]
+    E --> X[Explanation layer<br/>template; LLM only via POST /explain on button click]
     X -->|score, verdict, findings,<br/>explanation| A
     A --> C[CardService side panel]
 ```
@@ -48,7 +49,7 @@ flowchart LR
 | Explanation layer | Wording only, after scoring | `backend/app/explain/` |
 
 The split is deliberate: only the add-on has Gmail access, so it **collects and displays**;
-the backend **decides**. Detection logic lives in Python where it can be unit-tested (321 tests),
+the backend **decides**. Detection logic lives in Python where it can be unit-tested (341 tests),
 and could serve other clients unchanged.
 
 ## Technology choices
@@ -136,7 +137,15 @@ risk score, not a probability.** With labelled data they should be tuned.
 
 ## LLM explanation layer
 
-**The engine decides; the LLM only explains.**
+**The engine decides; the LLM only explains - and only when the user asks.**
+
+Opening an email calls `POST /analyze`, which returns the deterministic result with a template
+explanation and **never calls the LLM**. If a key is configured, the card shows an
+**Explain with AI** button. Clicking it calls `POST /explain` with the same minimized message:
+the backend re-runs the deterministic engine (the client never sends a score or verdict - the
+schema rejects unknown fields), then asks the LLM to word that authoritative result. A spinner
+blocks repeated clicks, and identical results are cached in memory for an hour, so repeated or
+concurrent clicks make one paid request.
 
 1. The engine produces the score, verdict and findings - final at this point.
 2. `explain()` receives a **copy** of the result and returns only text.
@@ -155,10 +164,13 @@ risk score, not a probability.** With labelled data they should be tuned.
 
 Provider: Anthropic Messages API via the official `anthropic` SDK, isolated in one function
 (`call_provider` in `explain/llm.py`) so another provider can be swapped in. Default model
-`claude-opus-5-5` at low effort, configurable with `LLM_MODEL`; 12 s timeout, no retries, 2,048
-output tokens maximum, server-side fallback on refusals.
+**`claude-haiku-5-5`** - rewording a finished result needs no deep reasoning, so the fast, low-cost
+model fits (configurable with `LLM_MODEL`). Thinking is disabled so the whole output budget goes to
+the answer; **`LLM_MAX_TOKENS` defaults to 400** (validated, 100-4000); a response cut off at the
+limit is never shown - the template is used. 12 s timeout, no retries. Token counts (not content)
+are logged to check the budget.
 
-**Status: implemented and tested with mocks; inactive until `ANTHROPIC_API_KEY` is set.**
+**Status: active when `ANTHROPIC_API_KEY` is set on the backend; called only on button click.**
 
 ## Trade-offs
 
@@ -209,7 +221,8 @@ uvicorn app.main:app --port 8000
 
 `backend/.env.example` documents the variable; keep real values in an untracked `backend/.env`.
 
-`GET /health` -> `{"status": "ok", "version": "..."}`. `POST /analyze` requires `X-API-Key`.
+`GET /health` -> `{"status": "ok", "version": "..."}`. `POST /analyze` (deterministic, every opened
+email) and `POST /explain` (same result + AI explanation, on button click) require `X-API-Key`.
 
 ### Backend (Render)
 
@@ -220,8 +233,9 @@ health check `/health`. Pushing to `main` redeploys automatically.
 | Environment variable | Required | Purpose |
 |---|---|---|
 | `API_KEY` | yes | Shared secret expected in `X-API-Key` |
-| `ANTHROPIC_API_KEY` | no | Enables LLM explanations (sends redacted findings to Anthropic) |
-| `LLM_MODEL` | no | Override the model (default `claude-opus-5-5`) |
+| `ANTHROPIC_API_KEY` | no | Shows the Explain with AI button; on click, redacted findings are sent to Anthropic |
+| `LLM_MODEL` | no | Override the model (default `claude-haiku-5-5`) |
+| `LLM_MAX_TOKENS` | no | Output token limit (default 400, valid 100-4000) |
 | `LLM_TIMEOUT_SECONDS` | no | LLM timeout (default 12) |
 
 ### Add-on
@@ -242,7 +256,7 @@ unknown fields, so a newer add-on needs a backend that knows them.
 
 ```bash
 cd backend
-pytest -q          # 321 tests, no network access
+pytest -q          # 341 tests, no network access
 ```
 
 Organized by layer: parsers (`test_auth_results_parser`, `test_urls`, `test_domains`), each check

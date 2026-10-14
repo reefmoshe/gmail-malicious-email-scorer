@@ -118,6 +118,7 @@ def test_response_contract_fields(client):
     assert set(body) == {
         "analysis_mode", "score_type", "score", "verdict", "verdict_reason", "summary", "top_reasons",
         "findings", "positive_findings", "categories", "checks", "coverage", "engine_version", "explanation",
+        "ai_explanation_available",
     }
     assert body["explanation"]["source"] == "template"  # no LLM configured in tests
     assert body["analysis_mode"] == "live"

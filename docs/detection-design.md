@@ -117,7 +117,8 @@ dominating the score.
 ## Explanation layer (`explain/`)
 
 Runs after scoring on a deep copy and returns wording only. The template explanation is always
-available; the LLM explanation is used when `ANTHROPIC_API_KEY` is set. The LLM receives trusted
+available; the LLM explanation is produced only by `POST /explain` (the "Explain with AI" button)
+when `ANTHROPIC_API_KEY` is set - `/analyze` never calls it. The LLM receives trusted
 engine fields and redacted evidence in a separate `untrusted_evidence` field (no message text,
 mailbox names or display names), answers in a JSON schema, and its output is rejected - falling
 back to the template - on certainty claims, a different score, refusals, timeouts or invalid JSON.

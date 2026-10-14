@@ -195,12 +195,14 @@ def test_api_always_returns_a_complete_result_when_the_llm_fails(llm_on, monkeyp
 # --- Provider adapter against a fake SDK client (exercises call_provider itself) -------------------
 
 class _FakeSdk:
-    def __init__(self, stop_reason, text):
+    """Stands in for anthropic.Anthropic: records requests, returns a canned response."""
+
+    def __init__(self, stop_reason, text, block_type="text"):
         self.requests = []
         outer = self
 
         class Block:
-            type = "text"
+            type = block_type
 
         class Response:
             pass
@@ -216,38 +218,71 @@ class _FakeSdk:
                 outer.requests.append(kwargs)
                 return response
 
-        class Beta:
-            messages = Messages()
-
         class Client:
             def __init__(self, **kwargs):
                 outer.client_kwargs = kwargs
-                self.beta = Beta()
+                self.messages = Messages()
 
         self.Anthropic = Client
 
 
-def test_adapter_request_shape_and_success(monkeypatch):
+_VALID_JSON = json.dumps({"summary": "s", "key_reasons": ["r"], "recommendation": "x", "limitations": None})
+
+
+def test_adapter_request_shape(monkeypatch):
     import anthropic
 
-    fake = _FakeSdk("end_turn", json.dumps({"summary": "s", "key_reasons": ["r"], "recommendation": "x", "limitations": None}))
+    fake = _FakeSdk("end_turn", _VALID_JSON)
     monkeypatch.setattr(anthropic, "Anthropic", fake.Anthropic)
     out = llm.call_provider({"engine_result": {"verdict": "SUSPICIOUS"}})
     request = fake.requests[0]
     assert out["summary"] == "s"
-    assert request["model"] == llm.DEFAULT_MODEL
+    assert request["model"] == "claude-haiku-5-5"
+    assert request["max_tokens"] == 400
+    assert request["thinking"] == {"type": "disabled"}  # the whole budget goes to the answer
     assert request["output_config"]["format"]["type"] == "json_schema"
-    assert request["fallbacks"] == "default" and "server-side-fallback-2026-07-01" in request["betas"]
-    assert "tools" not in request  # no tool or browsing access
+    assert request["system"] == llm.SYSTEM_PROMPT
+    assert "tools" not in request and "fallbacks" not in request
     assert fake.client_kwargs["max_retries"] == 0
 
 
-def test_adapter_treats_refusal_as_failure(monkeypatch):
+def test_max_tokens_is_configurable(monkeypatch):
+    monkeypatch.setenv("LLM_MAX_TOKENS", "600")
+    assert llm.max_tokens() == 600
+
+
+@pytest.mark.parametrize("value", ["abc", "", "-5", "50", "99999", "4.5"])
+def test_invalid_max_tokens_fall_back_to_400(monkeypatch, value):
+    monkeypatch.setenv("LLM_MAX_TOKENS", value)
+    assert llm.max_tokens() == 400
+
+
+def test_non_haiku_models_keep_their_default_thinking(monkeypatch):
     import anthropic
 
-    monkeypatch.setattr(anthropic, "Anthropic", _FakeSdk("refusal", "").Anthropic)
-    with pytest.raises(RuntimeError):
+    fake = _FakeSdk("end_turn", _VALID_JSON)
+    monkeypatch.setattr(anthropic, "Anthropic", fake.Anthropic)
+    monkeypatch.setenv("LLM_MODEL", "claude-opus-5-5")
+    llm.call_provider({})
+    assert "thinking" not in fake.requests[0]  # disabling thinking is a 400 on Opus 5.5
+
+
+@pytest.mark.parametrize(
+    "stop_reason, text, block_type",
+    [
+        ("max_tokens", '{"summary": "cut o', "text"),  # truncated JSON is never shown
+        ("refusal", "", "text"),
+        ("end_turn", "", "thinking"),  # no text block at all
+    ],
+)
+def test_unusable_responses_raise_and_the_template_is_used(monkeypatch, stop_reason, text, block_type):
+    import anthropic
+
+    monkeypatch.setattr(anthropic, "Anthropic", _FakeSdk(stop_reason, text, block_type).Anthropic)
+    with pytest.raises(llm.UnusableResponse):
         llm.call_provider({})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+    assert explain(phishing_result()).source == "template"
 
 
 @pytest.mark.parametrize(

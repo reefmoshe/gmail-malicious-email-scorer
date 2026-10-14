@@ -11,10 +11,14 @@ Trust boundary:
 The provider adapter is the only vendor-specific code; nothing else depends on it.
 """
 
+import hashlib
 import json
 import logging
 import os
 import re
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
@@ -23,10 +27,18 @@ from ..schemas import AnalyzeResponse
 
 logger = logging.getLogger("scorer.explain")
 
-DEFAULT_MODEL = "claude-opus-5-5"
+# Rewording a finished result needs no deep reasoning: a fast, low-cost model is enough.
+DEFAULT_MODEL = "claude-haiku-5-5"
+DEFAULT_MAX_TOKENS = 400
+_MAX_TOKENS_RANGE = (100, 4000)
 _DEFAULT_TIMEOUT_SECONDS = 12.0
-_MAX_OUTPUT_TOKENS = 2048
-_EVIDENCE_CATEGORIES = {"authentication", "sender_identity", "urls", "attachments", "organization"}
+_CACHE_SECONDS = 3600
+_CACHE_ENTRIES = 256
+_EVIDENCE_CATEGORIES = {"authentication", "sender_identity", "urls", "attachments"}
+
+
+class UnusableResponse(Exception):
+    """The provider answered, but the answer cannot be used (truncated, refused, no text)."""
 
 # Version-controlled system prompt, kept in its own file so it can be reviewed on its own.
 SYSTEM_PROMPT = (Path(__file__).parent / "system_prompt.md").read_text(encoding="utf-8").strip()
@@ -93,7 +105,8 @@ def build_input(result: AnalyzeResponse) -> dict:
             "verdict_reason": result.verdict_reason,
         },
         "findings": [
-            {"title": f.title, "severity": f.severity, "points": f.counted_points, "meaning": f.explanation}
+            # First sentence of our own explanation only: enough meaning, fewer input tokens.
+            {"title": f.title, "severity": f.severity, "points": f.counted_points, "meaning": f.explanation.split(". ")[0]}
             for f in counted
         ],
         "reassuring_signs": [p.title for p in result.positive_findings[:3]],
@@ -130,10 +143,42 @@ def validate(raw: object, result: AnalyzeResponse) -> LlmExplanation | None:
     return explanation
 
 
+# Identical engine results get the identical explanation: repeated clicks or re-opened emails
+# never pay twice. Keyed by a hash of the (already sanitized) model input; memory only.
+_cache: "OrderedDict[str, tuple[float, LlmExplanation]]" = OrderedDict()
+_cache_lock = threading.Lock()
+_inflight: dict[str, threading.Lock] = {}
+
+
 def generate(result: AnalyzeResponse) -> LlmExplanation | None:
     """Return a validated explanation, or None on any failure. Never raises."""
+    payload = build_input(result)
+    key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    with _cache_lock:
+        lock = _inflight.setdefault(key, threading.Lock())
     try:
-        raw = call_provider(build_input(result))
+        with lock:  # a concurrent duplicate request waits for the first one instead of paying again
+            cached = _cached(key)
+            if cached:
+                return cached
+            explanation = _request(payload, result)
+            if explanation:
+                with _cache_lock:
+                    _cache[key] = (time.time() + _CACHE_SECONDS, explanation)
+                    while len(_cache) > _CACHE_ENTRIES:
+                        _cache.popitem(last=False)
+            return explanation
+    finally:
+        with _cache_lock:
+            _inflight.pop(key, None)
+
+
+def _request(payload: dict, result: AnalyzeResponse) -> LlmExplanation | None:
+    try:
+        raw = call_provider(payload)
+    except UnusableResponse as exc:
+        logger.warning("llm explanation unusable: %s", exc)
+        return None
     except Exception as exc:  # noqa: BLE001 - any provider failure means "use the template"
         logger.warning("llm explanation unavailable: %s", type(exc).__name__)
         return None
@@ -143,30 +188,74 @@ def generate(result: AnalyzeResponse) -> LlmExplanation | None:
     return explanation
 
 
+def _cached(key: str) -> LlmExplanation | None:
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry and entry[0] > time.time():
+            return entry[1]
+        return None
+
+
+def clear_cache() -> None:
+    with _cache_lock:
+        _cache.clear()
+        _inflight.clear()
+
+
 def call_provider(payload: dict) -> object:
     """Anthropic adapter (official SDK). Swap this function to use another provider."""
-    import anthropic  # optional dependency, loaded only when explanations are enabled
+    import anthropic  # optional dependency, loaded only when explanations are requested
 
-    client = anthropic.Anthropic(timeout=_timeout(), max_retries=0)
-    response = client.beta.messages.create(
-        model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
-        max_tokens=_MAX_OUTPUT_TOKENS,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        system=SYSTEM_PROMPT,
-        messages=[
+    model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
+    request = {
+        "model": model,
+        "max_tokens": max_tokens(),
+        "system": SYSTEM_PROMPT,
+        "messages": [
             {
                 "role": "user",
                 "content": "Explain this result to the user. The JSON below is the complete input.\n"
                 "<engine_output>\n" + json.dumps(payload, ensure_ascii=False) + "\n</engine_output>",
             }
         ],
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": _OUTPUT_SCHEMA}},
-    )
+        "output_config": {"effort": "low", "format": {"type": "json_schema", "schema": _OUTPUT_SCHEMA}},
+    }
+    if model.startswith("claude-haiku"):
+        # Thinking tokens count against max_tokens; this task needs none, so the whole
+        # budget goes to the answer. (Opus/Sonnet 5.5 cannot disable thinking.)
+        request["thinking"] = {"type": "disabled"}
+
+    client = anthropic.Anthropic(timeout=_timeout(), max_retries=0)
+    response = client.messages.create(**request)
+    usage = getattr(response, "usage", None)
+    if usage is not None:  # token counts only - used to check that the output budget is sufficient
+        logger.info("llm model=%s input_tokens=%s output_tokens=%s max_tokens=%s stop_reason=%s",
+                    model, usage.input_tokens, usage.output_tokens, request["max_tokens"], response.stop_reason)
+    if response.stop_reason == "max_tokens":
+        raise UnusableResponse("truncated at max_tokens")
     if response.stop_reason != "end_turn":
-        raise RuntimeError(f"unusable stop_reason {response.stop_reason}")
-    text = next(block.text for block in response.content if block.type == "text")
+        raise UnusableResponse(f"stop_reason {response.stop_reason}")
+    text = next((block.text for block in response.content if block.type == "text"), None)
+    if text is None:
+        raise UnusableResponse("no text block")
     return json.loads(text)
+
+
+def max_tokens() -> int:
+    """LLM_MAX_TOKENS, default 400; invalid or out-of-range values fall back to the default."""
+    raw = os.environ.get("LLM_MAX_TOKENS")
+    if raw is None:
+        return DEFAULT_MAX_TOKENS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("invalid LLM_MAX_TOKENS; using %d", DEFAULT_MAX_TOKENS)
+        return DEFAULT_MAX_TOKENS
+    low, high = _MAX_TOKENS_RANGE
+    if not low <= value <= high:
+        logger.warning("LLM_MAX_TOKENS outside %d-%d; using %d", low, high, DEFAULT_MAX_TOKENS)
+        return DEFAULT_MAX_TOKENS
+    return value
 
 
 def _timeout() -> float:

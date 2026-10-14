@@ -32,7 +32,8 @@ function buildHomepageCard() {
     .build();
 }
 
-function buildResultCard(metadata, result) {
+function buildResultCard(metadata, result, options) {
+  options = options || {};
   var card = CardService.newCardBuilder()
     .setHeader(CardService.newCardHeader().setTitle(ADDON_TITLE));
 
@@ -55,7 +56,11 @@ function buildResultCard(metadata, result) {
   }
 
   card.addSection(buildVerdictSection_(data));
-  if (data.explanation) {
+  if (options.explainRequested && data.explanation) {
+    card.addSection(buildExplanationSection_(data.explanation, true));
+  } else if (data.ai_explanation_available) {
+    card.addSection(buildExplainButtonSection_());
+  } else if (data.explanation) {
     card.addSection(buildExplanationSection_(data.explanation));
   }
   var reasons = buildReasonsSection_(data.findings || []);
@@ -76,21 +81,44 @@ function buildVerdictSection_(data) {
     ? 'No score (not enough data)'
     : 'Risk score: ' + data.score + ' / 100';
   // The deterministic decision. Nothing below this section can change it.
-  return CardService.newCardSection()
+  var section = CardService.newCardSection()
     .setHeader('Security verdict · rule-based engine')
     .addWidget(CardService.newDecoratedText()
       .setText('<font color="' + verdict.color + '"><b>' + verdict.label + '</b></font>')
       .setBottomLabel(escape_(scoreText))
       .setWrapText(true))
     .addWidget(CardService.newTextParagraph()
-      .setText('<i>' + escape_(data.verdict_reason) + '</i>'))
-    .addWidget(retryButton_());
+      .setText('<i>' + escape_(data.verdict_reason) + '</i>'));
+  if ((data.top_reasons || []).length) {
+    section.addWidget(CardService.newTextParagraph().setText('<b>Main findings:</b><br>' +
+      data.top_reasons.map(function (r) { return '• ' + escape_(r); }).join('<br>')));
+  }
+  return section.addWidget(retryButton_());
+}
+
+/** The only path that calls the LLM; the spinner blocks repeated clicks while it runs. */
+function buildExplainButtonSection_() {
+  return CardService.newCardSection()
+    .addWidget(CardService.newTextButton()
+      .setText('Explain with AI')
+      .setOnClickAction(CardService.newAction()
+        .setFunctionName('onExplainWithAi')
+        .setLoadIndicator(CardService.LoadIndicator.SPINNER)))
+    .addWidget(CardService.newTextParagraph().setText(
+      '<font color="#5f6368"><i>Sends a summary of the findings above (no email text) to an AI service ' +
+      'to explain them in plain language. The verdict does not change.</i></font>'));
 }
 
 /** Plain-language wording. Clearly labelled, and never presented as a second verdict. */
-function buildExplanationSection_(explanation) {
+function buildExplanationSection_(explanation, aiRequested) {
+  var header = 'In plain words';
+  if (explanation.source === 'ai') {
+    header = 'AI explanation';
+  } else if (aiRequested) {
+    header = 'In plain words · AI explanation unavailable right now';
+  }
   var section = CardService.newCardSection()
-    .setHeader(explanation.source === 'ai' ? 'Explanation · AI-written' : 'In plain words')
+    .setHeader(header)
     .addWidget(CardService.newTextParagraph().setText(escape_(explanation.summary)));
   if ((explanation.key_reasons || []).length) {
     section.addWidget(CardService.newTextParagraph().setText(

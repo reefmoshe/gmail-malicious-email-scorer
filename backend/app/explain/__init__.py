@@ -1,8 +1,9 @@
 """Explanation layer: runs strictly AFTER scoring and returns wording only.
 
 explain() receives the finished engine result and returns an Explanation; it never
-returns or modifies scores, verdicts or findings. The optional LLM path falls back to
-the deterministic template on any problem, so the add-on always gets a full result.
+returns or modifies scores, verdicts or findings. It is called only by POST /explain,
+i.e. when the user clicks "Explain with AI"; /analyze uses the template and never calls
+a provider. The LLM path falls back to the deterministic template on any problem.
 """
 
 from ..schemas import AnalyzeResponse, Explanation
