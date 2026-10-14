@@ -55,6 +55,9 @@ function buildResultCard(metadata, result) {
   }
 
   card.addSection(buildVerdictSection_(data));
+  if (data.explanation) {
+    card.addSection(buildExplanationSection_(data.explanation));
+  }
   var reasons = buildReasonsSection_(data.findings || []);
   if (reasons) {
     card.addSection(reasons);
@@ -72,16 +75,34 @@ function buildVerdictSection_(data) {
   var scoreText = data.score === null || data.score === undefined
     ? 'No score (not enough data)'
     : 'Risk score: ' + data.score + ' / 100';
+  // The deterministic decision. Nothing below this section can change it.
   return CardService.newCardSection()
+    .setHeader('Security verdict · rule-based engine')
     .addWidget(CardService.newDecoratedText()
-      .setTopLabel('Verdict')
       .setText('<font color="' + verdict.color + '"><b>' + verdict.label + '</b></font>')
       .setBottomLabel(escape_(scoreText))
       .setWrapText(true))
-    .addWidget(CardService.newTextParagraph().setText(escape_(data.summary)))
     .addWidget(CardService.newTextParagraph()
       .setText('<i>' + escape_(data.verdict_reason) + '</i>'))
     .addWidget(retryButton_());
+}
+
+/** Plain-language wording. Clearly labelled, and never presented as a second verdict. */
+function buildExplanationSection_(explanation) {
+  var section = CardService.newCardSection()
+    .setHeader(explanation.source === 'ai' ? 'Explanation · AI-written' : 'In plain words')
+    .addWidget(CardService.newTextParagraph().setText(escape_(explanation.summary)));
+  if ((explanation.key_reasons || []).length) {
+    section.addWidget(CardService.newTextParagraph().setText(
+      explanation.key_reasons.map(function (r) { return '• ' + escape_(r); }).join('<br>')));
+  }
+  section.addWidget(CardService.newTextParagraph()
+    .setText('<b>What to do:</b> ' + escape_(explanation.recommendation)));
+  if (explanation.limitations) {
+    section.addWidget(CardService.newTextParagraph().setText('<i>' + escape_(explanation.limitations) + '</i>'));
+  }
+  return section.addWidget(CardService.newTextParagraph()
+    .setText('<font color="#5f6368"><i>' + escape_(explanation.notice) + '</i></font>'));
 }
 
 /** Findings that contributed to the score, strongest first; others are listed as details. */
@@ -91,7 +112,7 @@ function buildReasonsSection_(findings) {
   if (!counted.length && !context.length) {
     return null;
   }
-  var section = CardService.newCardSection().setHeader('Why');
+  var section = CardService.newCardSection().setHeader('Technical findings');
   counted.forEach(function (f) {
     var label = f.severity.toUpperCase() + ' · +' + f.counted_points + ' points';
     if (f.score_status !== 'counted' && f.note) {
