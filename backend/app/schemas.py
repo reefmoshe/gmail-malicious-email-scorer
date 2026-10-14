@@ -8,6 +8,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+CheckStatus = Literal["completed", "failed", "not_applicable", "not_available", "not_implemented"]
+CategoryStatus = Literal["completed", "partial", "failed", "not_applicable", "not_available", "not_implemented"]
+
 
 class EmailMessage(BaseModel):
     """Minimal metadata extracted by the add-on from the currently opened email."""
@@ -30,27 +33,60 @@ class AnalyzeRequest(BaseModel):
     message: EmailMessage
 
 
-class Finding(BaseModel):
+class FindingOut(BaseModel):
+    signal_id: str
+    category: str
+    severity: Literal["low", "medium", "high"]
+    title: str
+    explanation: str
+    evidence: list[str]
+    points: int = Field(description="Nominal weight of the signal")
+    counted_points: int = Field(description="Points actually added to the score")
+    score_status: Literal["counted", "correlated", "capped"]
+    note: str | None = None
+
+
+class PositiveFindingOut(BaseModel):
     id: str
     title: str
-    severity: Literal["low", "medium", "high"]
-    points: int = Field(ge=0, le=100)
-    evidence: str
+    explanation: str
+    evidence: list[str]
 
 
-class ReceivedSummary(BaseModel):
-    """Proof-of-receipt for connectivity tests. Contains no email content."""
+class CategoryResult(BaseModel):
+    id: str
+    title: str
+    status: CategoryStatus
+    score: int
+    cap: int
 
-    subject_length: int
-    sender_domain: str | None
-    fields_present: list[str]
+
+class CheckResult(BaseModel):
+    id: str
+    category: str
+    title: str
+    status: CheckStatus
+    reason: str | None = None
+
+
+class Coverage(BaseModel):
+    checks_completed: int
+    checks_total: int
+    max_attainable_score: int = Field(description="Highest score the analyzed categories can produce")
+    limitations: list[str]
 
 
 class AnalyzeResponse(BaseModel):
-    analysis_mode: Literal["connectivity_test", "live"]
-    score: int | None = Field(default=None, ge=0, le=100)
-    verdict: Literal["SAFE", "SUSPICIOUS", "MALICIOUS", "TEST"]
+    analysis_mode: Literal["live"]
+    score_type: Literal["heuristic_risk_score"] = "heuristic_risk_score"
+    score: int | None = Field(default=None, ge=0, le=100, description="Null when INCONCLUSIVE")
+    verdict: Literal["LOW_RISK", "SUSPICIOUS", "MALICIOUS", "INCONCLUSIVE"]
+    verdict_reason: str
     summary: str
-    findings: list[Finding] = []
-    received: ReceivedSummary | None = None
+    top_reasons: list[str]
+    findings: list[FindingOut]
+    positive_findings: list[PositiveFindingOut]
+    categories: list[CategoryResult]
+    checks: list[CheckResult]
+    coverage: Coverage
     engine_version: str

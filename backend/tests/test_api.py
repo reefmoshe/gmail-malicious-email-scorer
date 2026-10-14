@@ -46,16 +46,13 @@ def test_analyze_fails_closed_when_server_key_missing(monkeypatch):
     assert response.status_code == 503
 
 
-def test_analyze_connectivity_result(client):
+def test_analyze_returns_live_result(client):
     response = client.post("/analyze", json=_payload(), headers={"X-API-Key": TEST_KEY})
     assert response.status_code == 200
     body = response.json()
-    assert body["analysis_mode"] == "connectivity_test"
-    assert body["verdict"] == "TEST"
-    assert body["score"] is None
-    assert body["received"]["sender_domain"] == "example.com"
-    assert body["received"]["subject_length"] == len("Your invoice")
-    assert "reply_to" not in body["received"]["fields_present"]
+    assert body["analysis_mode"] == "live"
+    assert body["verdict"] in {"LOW_RISK", "SUSPICIOUS", "MALICIOUS", "INCONCLUSIVE"}
+    assert 0 <= body["score"] <= 100
 
 
 def test_analyze_rejects_oversized_field(client):

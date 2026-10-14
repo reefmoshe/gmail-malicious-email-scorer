@@ -1,3 +1,4 @@
 fastapi==0.143.0
+publicsuffixlist==1.1.0.20261010
 pydantic==2.14.1
 uvicorn==0.54.0

@@ -37,12 +37,14 @@ def health() -> dict:
 def analyze_email(request: AnalyzeRequest) -> AnalyzeResponse:
     started = time.perf_counter()
     result = analyze(request.message)
-    # Log outcome and timing only - never email content or addresses.
+    # Log outcome, signal ids and timing only - never evidence, email content or addresses.
     logger.info(
-        "analyze mode=%s verdict=%s score=%s duration_ms=%.1f",
-        result.analysis_mode,
+        "analyze verdict=%s score=%s signals=%s checks_completed=%d/%d duration_ms=%.1f",
         result.verdict,
         result.score,
+        ",".join(f.signal_id for f in result.findings) or "-",
+        result.coverage.checks_completed,
+        result.coverage.checks_total,
         (time.perf_counter() - started) * 1000,
     )
     return result
